@@ -296,6 +296,7 @@ llama_data_source.o: prepare
 ## https://github.com/ggerganov/llama.cpp/pull/1902
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
+	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
 	touch $@
 
 libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)

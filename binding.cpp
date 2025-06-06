@@ -1127,13 +1127,18 @@ void* load_binding_model_from_memory(const void* buffer, size_t buffer_size, int
     close(fd);
     
 #elif defined(_WIN32)
-    // Windows doesn't have memfd_create, but we need to implement memory loading
-    // Since llama.cpp requires a file path, we need to patch it to support memory buffers
-    fprintf(stderr, "%s: error: memory loading not yet implemented for Windows\n", __func__);
-    fprintf(stderr, "%s: llama.cpp needs to be patched with memory buffer support\n", __func__);
-    delete lparams;
-    delete state;
-    return nullptr;
+    // Windows: Use the patched llama_load_model_from_buffer directly
+    fprintf(stderr, "%s: loading model from memory buffer on Windows\n", __func__);
+    
+    // The patch provides llama_load_model_from_buffer, so we can use it directly
+    model = llama_load_model_from_buffer(buffer, buffer_size, ctx_params);
+    
+    if (model == nullptr) {
+        fprintf(stderr, "%s: error: failed loading model from memory buffer\n", __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
     
 #else
     // Fallback: use regular temporary file
