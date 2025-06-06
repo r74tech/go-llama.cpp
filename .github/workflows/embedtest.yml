@@ -27,9 +27,21 @@ jobs:
           make clean
           make libbinding.a
 
+      - name: Cache test model
+        uses: actions/cache@v4
+        with:
+          path: ggllm-test-model.bin
+          key: ${{ runner.os }}-test-model-codellama-7b-q2k
+          restore-keys: |
+            ${{ runner.os }}-test-model-
+
       - name: Download test model
         run: |
-          make ggllm-test-model.bin
+          if [ ! -f ggllm-test-model.bin ]; then
+            make ggllm-test-model.bin
+          else
+            echo "Using cached test model"
+          fi
 
       - name: Run tests
         run: |
@@ -123,10 +135,22 @@ jobs:
           make clean
           make libbinding.a
 
+      - name: Cache test model
+        uses: actions/cache@v4
+        with:
+          path: ggllm-test-model.bin
+          key: ${{ runner.os }}-test-model-codellama-7b-q2k
+          restore-keys: |
+            ${{ runner.os }}-test-model-
+
       - name: Download test model
         shell: bash
         run: |
-          make ggllm-test-model.bin
+          if [ ! -f ggllm-test-model.bin ]; then
+            make ggllm-test-model.bin
+          else
+            echo "Using cached test model"
+          fi
 
       - name: Run tests
         shell: bash
