@@ -236,15 +236,23 @@ $(info )
 # Use this if you want to set the default behavior
 
 llama.cpp/grammar-parser.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.obj ../llama.cpp/grammar-parser.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o)
+else
 	cd build && cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o
+endif
 
 llama.cpp/ggml-alloc.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.obj ../llama.cpp/ggml-alloc.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.o ../llama.cpp/ggml-alloc.o)
+else
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.o ../llama.cpp/ggml-alloc.o
+endif
 
 llama.cpp/ggml.o: prepare
 	mkdir -p build
 ifdef IS_WINDOWS
-	cd build && CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
+	cd build && CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && (cp -rf CMakeFiles/ggml.dir/ggml.c.obj ../llama.cpp/ggml.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o)
 else
 	cd build && CC="$(CC)" CXX="$(CXX)" cmake ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
 endif
@@ -259,13 +267,25 @@ llama.cpp/ggml-metal.o: llama.cpp/ggml.o
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-metal.m.o ../llama.cpp/ggml-metal.o
 
 llama.cpp/k_quants.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/ggml.dir/k_quants.c.obj ../llama.cpp/k_quants.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/k_quants.c.o ../llama.cpp/k_quants.o)
+else
 	cd build && cp -rf CMakeFiles/ggml.dir/k_quants.c.o ../llama.cpp/k_quants.o
+endif
 
 llama.cpp/llama.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/llama.dir/llama.cpp.obj ../llama.cpp/llama.o 2>/dev/null || cp -rf CMakeFiles/llama.dir/llama.cpp.o ../llama.cpp/llama.o)
+else
 	cd build && cp -rf CMakeFiles/llama.dir/llama.cpp.o ../llama.cpp/llama.o
+endif
 
 llama.cpp/common.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf common/CMakeFiles/common.dir/common.cpp.obj ../llama.cpp/common.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/common.cpp.o ../llama.cpp/common.o)
+else
 	cd build && cp -rf common/CMakeFiles/common.dir/common.cpp.o ../llama.cpp/common.o
+endif
 
 binding.o: prepare
 	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c $(LDFLAGS)
