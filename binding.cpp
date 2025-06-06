@@ -2,6 +2,15 @@
 #include "llama.h"
 
 #include "binding.h"
+
+// Forward declaration for llama_load_model_from_buffer
+// This function is provided by the memory-loading patch
+extern "C" {
+    struct llama_model * llama_load_model_from_buffer(
+        const void * buffer,
+        size_t buffer_size,
+        struct llama_context_params params);
+}
 #include "grammar-parser.h"
 #include "llama_data_source.h"
 #include <cassert>

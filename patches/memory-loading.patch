@@ -1,5 +1,5 @@
 diff --git a/ggml.c b/ggml.c
-index a0be068d..64bbd008 100644
+index a0be068d..57edb38b 100644
 --- a/ggml.c
 +++ b/ggml.c
 @@ -19700,6 +19700,21 @@ static bool gguf_fread_el(FILE * file, void * dst, size_t size, size_t * offset)
@@ -24,7 +24,7 @@ index a0be068d..64bbd008 100644
  // NOTE: temporary handling of GGUFv1 >> remove after Oct 2023
  static bool gguf_fread_str_cur(FILE * file, struct gguf_str * p, size_t * offset) {
      p->n    = 0;
-@@ -20062,6 +20077,229 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
+@@ -20062,6 +20077,266 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
      return ctx;
  }
  
@@ -243,6 +243,43 @@ index a0be068d..64bbd008 100644
 +        ctx->alignment = gguf_get_val_u32(ctx, alignment_idx);
 +    }
 +
++    // we require the data section to be aligned, so take into account any padding
++    {
++        const size_t offset_pad = offset % ctx->alignment;
++
++        if (offset_pad != 0) {
++            offset += ctx->alignment - offset_pad;
++        }
++    }
++
++    // store the current offset - this is where the data section starts
++    ctx->offset = offset;
++
++    // compute the total size of the data section
++    {
++        ctx->size = 0;
++        for (uint32_t i = 0; i < ctx->header.n_tensors; ++i) {
++            struct gguf_tensor_info * info = &ctx->infos[i];
++
++            const int64_t ne =
++                (int64_t) info->ne[0] *
++                (int64_t) info->ne[1] *
++                (int64_t) info->ne[2] *
++                (int64_t) info->ne[3];
++
++            if (ne % ggml_blck_size(info->type) != 0) {
++                fprintf(stderr, "%s: tensor '%s' of type %d (%s) number of elements (%" PRId64 ") is not a multiple of block size (%d)\n",
++                        __func__, info->name.data, (int) info->type, ggml_type_name(info->type), ne, ggml_blck_size(info->type));
++                gguf_free(ctx);
++                return NULL;
++            }
++
++            const size_t size_cur = (ne*ggml_type_size(info->type))/ggml_blck_size(info->type);
++
++            ctx->size += GGML_PAD(size_cur, ctx->alignment);
++        }
++    }
++
 +    // Store the buffer info if we're not loading the tensor data
 +    if (params.no_alloc) {
 +        ctx->data = (void *)buffer;
@@ -268,7 +305,7 @@ index b2251ace..87c9408c 100644
      GGML_API void gguf_free(struct gguf_context * ctx);
  
 diff --git a/llama.cpp b/llama.cpp
-index 6e23a077..52cb11b5 100644
+index 6e23a077..199b8ea1 100644
 --- a/llama.cpp
 +++ b/llama.cpp
 @@ -1280,6 +1280,11 @@ struct llama_model_loader {
@@ -371,7 +408,7 @@ index 6e23a077..52cb11b5 100644
      llama_model_loader(const std::string & fname, bool use_mmap) : file(fname.c_str(), "rb") {
          struct gguf_init_params params = {
              /*.no_alloc = */ true,
-@@ -1492,12 +1578,34 @@ struct llama_model_loader {
+@@ -1492,7 +1578,6 @@ struct llama_model_loader {
  
      size_t file_offset(const char * name) const {
          const int idx = gguf_find_tensor(ctx_gguf, name);
@@ -379,36 +416,7 @@ index 6e23a077..52cb11b5 100644
          if (idx < 0) {
              throw std::runtime_error(format("%s: tensor '%s' not found in the file", __func__, name));
          }
- 
--        return gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, idx);
-+        if (buffer_data) {
-+            // For memory buffers, calculate the offset
-+            size_t meta_size = 0;
-+            meta_size += sizeof(uint32_t); // magic
-+            meta_size += sizeof(uint32_t); // version
-+            meta_size += sizeof(uint64_t); // n_tensors
-+            meta_size += sizeof(uint64_t); // n_kv
-+            
-+            // This is a simplified calculation - in practice, you'd need to
-+            // account for all the KV pairs and tensor infos
-+            size_t data_offset = meta_size;
-+            
-+            // Align to ctx_gguf->alignment
-+            size_t alignment = 32; // Default GGUF alignment
-+            const int alignment_idx = gguf_find_key(ctx_gguf, "general.alignment");
-+            if (alignment_idx != -1) {
-+                alignment = gguf_get_val_u32(ctx_gguf, alignment_idx);
-+            }
-+            data_offset = (data_offset + alignment - 1) & ~(alignment - 1);
-+            
-+            return data_offset + gguf_get_tensor_offset(ctx_gguf, idx);
-+        } else {
-+            return gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, idx);
-+        }
-     }
- 
-     void load_data_for(struct ggml_tensor * cur) const {
-@@ -1505,10 +1613,25 @@ struct llama_model_loader {
+@@ -1505,10 +1590,25 @@ struct llama_model_loader {
  
          if (use_mmap) {
              cur->data = (uint8_t *) mapping->addr + offs;
@@ -434,7 +442,7 @@ index 6e23a077..52cb11b5 100644
      }
  
      void load_all_data(struct ggml_context * ctx, llama_progress_callback progress_callback, void * progress_callback_user_data, llama_mlock * lmlock) {
-@@ -6296,6 +6419,68 @@ struct llama_model * llama_load_model_from_file(
+@@ -6296,6 +6396,68 @@ struct llama_model * llama_load_model_from_file(
      return model;
  }
  
