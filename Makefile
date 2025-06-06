@@ -15,6 +15,19 @@ ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
 
+# Set default compilers if not defined
+ifndef CC
+	ifdef IS_WINDOWS
+		CC = g++
+	else
+		CC = cc
+	endif
+endif
+
+ifndef CXX
+	CXX = g++
+endif
+
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
 
@@ -307,7 +320,13 @@ clean:
 	rm -rf build
 
 ggllm-test-model.bin:
+ifdef IS_WINDOWS
+	@echo Downloading test model...
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf' -OutFile 'ggllm-test-model.bin'" || \
+	curl -L -o ggllm-test-model.bin https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf
+else
 	wget -q https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf -O ggllm-test-model.bin
+endif
 
 test: ggllm-test-model.bin libbinding.a
 	C_INCLUDE_PATH=${INCLUDE_PATH} CGO_LDFLAGS=${CGO_LDFLAGS} LIBRARY_PATH=${LIBRARY_PATH} TEST_MODEL=ggllm-test-model.bin go run github.com/onsi/ginkgo/v2/ginkgo --label-filter="$(TEST_LABEL)" --flake-attempts 5 -v -r ./...

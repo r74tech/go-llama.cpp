@@ -76,7 +76,8 @@ jobs:
               fi
               
               echo "Checking for /tmp file access..."
-              if grep -E "open.*(/tmp/|llama)" strace.log | grep -v "ENOENT"; then
+              # Filter out llama log files which are debug logs, not model temp files
+              if grep -E "open.*(/tmp/|llama)" strace.log | grep -v "ENOENT" | grep -v "llama\.[0-9]*\.log"; then
                 echo "✗ WARNING: Temporary file access detected!"
                 cat strace.log
                 exit 1
