@@ -15,10 +15,21 @@ ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
 
+# Detect Windows (including MinGW/MSYS) early so we can use it for compiler defaults
+ifneq ($(findstring _NT,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+ifneq ($(findstring MINGW,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+ifneq ($(findstring MSYS,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+
 # Set default compilers if not defined
 ifndef CC
 	ifdef IS_WINDOWS
-		CC = g++
+		CC = gcc
 	else
 		CC = cc
 	endif
@@ -60,17 +71,6 @@ CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
 
 # OS specific
 # TODO: support Windows
-
-# Detect Windows (including MinGW/MSYS)
-ifneq ($(findstring _NT,$(UNAME_S)),)
-	IS_WINDOWS := 1
-endif
-ifneq ($(findstring MINGW,$(UNAME_S)),)
-	IS_WINDOWS := 1
-endif
-ifneq ($(findstring MSYS,$(UNAME_S)),)
-	IS_WINDOWS := 1
-endif
 
 # Set object file extension based on platform
 ifdef IS_WINDOWS
