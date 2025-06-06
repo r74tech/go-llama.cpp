@@ -19,7 +19,9 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
@@ -67,12 +69,7 @@ void sigint_handler(int signo) {
 }
 #endif
 
-// Structure to hold both model and context
-// Note: This matches the llama_binding_state structure defined in the patched common.h
-struct llama_binding_state {
-    llama_context* ctx;
-    llama_model* model;
-};
+// Note: llama_binding_state structure is now defined in common.h via the patch
 
 // Forward declarations
 // Note: load_binding_model is now provided by common.cpp via the patch
