@@ -45,6 +45,9 @@ jobs:
 
       - name: Run tests
         run: |
+          # Run test only on the main package first for debugging
+          TEST_MODEL=ggllm-test-model.bin go test -v . || true
+          # Then run full test suite
           TEST_MODEL=ggllm-test-model.bin make test
 
       - name: Build modelembed example
@@ -138,6 +141,13 @@ jobs:
           # Check if the library was built
           ls -la libbinding.a || echo "libbinding.a not found"
           ls -la llama.cpp/*.o || echo "No object files found"
+          # Check library dependencies
+          echo "Checking library dependencies..."
+          objdump -p libbinding.a | grep "DLL Name" || true
+          # Copy MinGW runtime DLLs to current directory for testing
+          cp /c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll . || true
+          cp /c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll . || true
+          cp /c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll . || true
 
       - name: Cache test model
         uses: actions/cache@v4
@@ -166,8 +176,8 @@ jobs:
           export CC=gcc
           export CXX=g++
           # Run with more verbose output to see what's failing
-          # Exclude examples directory which has go:embed directives
-          TEST_MODEL=ggllm-test-model.bin go test -v $(go list ./... | grep -v /examples/) || true
+          # Run test only on the main package to avoid go:embed errors in examples
+          TEST_MODEL=ggllm-test-model.bin go test -v . || true
           # Also run with ginkgo for more details
           TEST_MODEL=ggllm-test-model.bin make test
 

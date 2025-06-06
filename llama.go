@@ -4,6 +4,7 @@ package llama
 // #cgo LDFLAGS: -L${SRCDIR}/ -lbinding -lm -lstdc++
 // #cgo darwin LDFLAGS: -framework Accelerate -framework Foundation -framework Metal -framework MetalKit
 // #cgo darwin CXXFLAGS: -std=c++11
+// #cgo windows LDFLAGS: -static -static-libgcc -static-libstdc++ -lpthread
 // #include "binding.h"
 // #include <stdlib.h>
 import "C"
