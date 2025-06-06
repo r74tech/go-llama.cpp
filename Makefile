@@ -107,11 +107,7 @@ ifeq ($(UNAME_S),Haiku)
 endif
 
 # GPGPU specific
-ifdef IS_WINDOWS
-	GGML_CUDA_OBJ_PATH=ggml.dir/Release/ggml-cuda$(OBJ_EXT)
-else
-	GGML_CUDA_OBJ_PATH=CMakeFiles/ggml.dir/ggml-cuda.cu.o
-endif
+GGML_CUDA_OBJ_PATH=CMakeFiles/ggml.dir/ggml-cuda.cu.o
 
 
 # Architecture specific
@@ -240,23 +236,15 @@ $(info )
 # Use this if you want to set the default behavior
 
 llama.cpp/grammar-parser.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf common/common.dir/Release/grammar-parser$(OBJ_EXT) ../llama.cpp/grammar-parser.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp$(OBJ_EXT) ../llama.cpp/grammar-parser.o
-else
 	cd build && cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o
-endif
 
 llama.cpp/ggml-alloc.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf ggml.dir/Release/ggml-alloc$(OBJ_EXT) ../llama.cpp/ggml-alloc.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml-alloc.c$(OBJ_EXT) ../llama.cpp/ggml-alloc.o
-else
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.o ../llama.cpp/ggml-alloc.o
-endif
 
 llama.cpp/ggml.o: prepare
 	mkdir -p build
 ifdef IS_WINDOWS
-	cd build && CC="$(CC)" CXX="$(CXX)" cmake ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && (cp -rf ggml.dir/Release/ggml$(OBJ_EXT) ../llama.cpp/ggml.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml.c$(OBJ_EXT) ../llama.cpp/ggml.o)
+	cd build && CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
 else
 	cd build && CC="$(CC)" CXX="$(CXX)" cmake ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
 endif
@@ -265,39 +253,19 @@ llama.cpp/ggml-cuda.o: llama.cpp/ggml.o
 	cd build && cp -rf "$(GGML_CUDA_OBJ_PATH)" ../llama.cpp/ggml-cuda.o
 
 llama.cpp/ggml-opencl.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf ggml.dir/Release/ggml-opencl$(OBJ_EXT) ../llama.cpp/ggml-opencl.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml-opencl.cpp$(OBJ_EXT) ../llama.cpp/ggml-opencl.o
-else
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-opencl.cpp.o ../llama.cpp/ggml-opencl.o
-endif
 
 llama.cpp/ggml-metal.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf ggml.dir/Release/ggml-metal$(OBJ_EXT) ../llama.cpp/ggml-metal.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml-metal.m$(OBJ_EXT) ../llama.cpp/ggml-metal.o
-else
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-metal.m.o ../llama.cpp/ggml-metal.o
-endif
 
 llama.cpp/k_quants.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf ggml.dir/Release/k_quants$(OBJ_EXT) ../llama.cpp/k_quants.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/k_quants.c$(OBJ_EXT) ../llama.cpp/k_quants.o
-else
 	cd build && cp -rf CMakeFiles/ggml.dir/k_quants.c.o ../llama.cpp/k_quants.o
-endif
 
 llama.cpp/llama.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf llama.dir/Release/llama$(OBJ_EXT) ../llama.cpp/llama.o 2>/dev/null || cp -rf CMakeFiles/llama.dir/llama.cpp$(OBJ_EXT) ../llama.cpp/llama.o
-else
 	cd build && cp -rf CMakeFiles/llama.dir/llama.cpp.o ../llama.cpp/llama.o
-endif
 
 llama.cpp/common.o: llama.cpp/ggml.o
-ifdef IS_WINDOWS
-	cd build && cp -rf common/common.dir/Release/common$(OBJ_EXT) ../llama.cpp/common.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/common.cpp$(OBJ_EXT) ../llama.cpp/common.o
-else
 	cd build && cp -rf common/CMakeFiles/common.dir/common.cpp.o ../llama.cpp/common.o
-endif
 
 binding.o: prepare
 	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c $(LDFLAGS)
