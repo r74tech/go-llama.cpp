@@ -166,7 +166,8 @@ jobs:
           export CC=gcc
           export CXX=g++
           # Run with more verbose output to see what's failing
-          TEST_MODEL=ggllm-test-model.bin go test -v ./... || true
+          # Exclude examples directory which has go:embed directives
+          TEST_MODEL=ggllm-test-model.bin go test -v $(go list ./... | grep -v /examples/) || true
           # Also run with ginkgo for more details
           TEST_MODEL=ggllm-test-model.bin make test
 
