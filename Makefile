@@ -307,13 +307,14 @@ clean:
 	$(MAKE) -C llama.cpp clean
 	rm -rf build
 
+# Use a smaller model for faster testing (TinyLlama 1.1B instead of CodeLlama 7B)
 ggllm-test-model.bin:
 ifdef IS_WINDOWS
 	@echo Downloading test model...
-	@curl -L --progress-bar -o ggllm-test-model.bin https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf || \
-	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf' -OutFile 'ggllm-test-model.bin'"
+	@curl -L --progress-bar -o ggllm-test-model.bin https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf || \
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf' -OutFile 'ggllm-test-model.bin'"
 else
-	wget -q https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf -O ggllm-test-model.bin
+	wget -q https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf -O ggllm-test-model.bin
 endif
 
 test: ggllm-test-model.bin libbinding.a

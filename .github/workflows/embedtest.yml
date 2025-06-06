@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ggllm-test-model.bin
-          key: ${{ runner.os }}-test-model-codellama-7b-q2k
+          key: ${{ runner.os }}-test-model-tinyllama-1.1b-q2k
           restore-keys: |
             ${{ runner.os }}-test-model-
 
@@ -153,7 +153,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ggllm-test-model.bin
-          key: ${{ runner.os }}-test-model-codellama-7b-q2k
+          key: ${{ runner.os }}-test-model-tinyllama-1.1b-q2k
           restore-keys: |
             ${{ runner.os }}-test-model-
 
@@ -171,13 +171,15 @@ jobs:
 
       - name: Run tests
         shell: bash
+        timeout-minutes: 30
         run: |
           export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
           export CC=gcc
           export CXX=g++
           # Run with more verbose output to see what's failing
           # Run test only on the main package to avoid go:embed errors in examples
-          TEST_MODEL=ggllm-test-model.bin go test -v . || true
+          # Increase test timeout to 30 minutes for Windows
+          TEST_MODEL=ggllm-test-model.bin go test -v -timeout 30m . || true
           # Also run with ginkgo for more details
           TEST_MODEL=ggllm-test-model.bin make test
 
