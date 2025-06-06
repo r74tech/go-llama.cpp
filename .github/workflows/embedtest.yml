@@ -120,9 +120,6 @@ jobs:
         with:
           go-version: "1.21"
 
-      - name: Set up MSVC
-        uses: microsoft/setup-msbuild@v1.1
-
       - name: Install MinGW
         run: |
           choco install mingw -y
@@ -132,6 +129,10 @@ jobs:
         shell: bash
         run: |
           export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
+          export CC=gcc
+          export CXX=g++
+          which gcc || echo "gcc not found"
+          which g++ || echo "g++ not found"
           make clean
           make libbinding.a
 
@@ -146,6 +147,9 @@ jobs:
       - name: Download test model
         shell: bash
         run: |
+          export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
+          export CC=gcc
+          export CXX=g++
           if [ ! -f ggllm-test-model.bin ]; then
             make ggllm-test-model.bin
           else
@@ -156,6 +160,8 @@ jobs:
         shell: bash
         run: |
           export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
+          export CC=gcc
+          export CXX=g++
           TEST_MODEL=ggllm-test-model.bin make test
 
       - name: Build modelembed example
