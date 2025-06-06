@@ -232,13 +232,16 @@ llama.cpp/common.o: llama.cpp/ggml.o
 binding.o: prepare
 	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c $(LDFLAGS)
 
+llama_data_source.o: prepare
+	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common llama_data_source.cpp -o llama_data_source.o -c $(LDFLAGS)
+
 ## https://github.com/ggerganov/llama.cpp/pull/1902
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
 	touch $@
 
-libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o $(EXTRA_TARGETS)
-	ar src libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o $(EXTRA_TARGETS)
+libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
+	ar src libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
 
 clean:
 	rm -rf *.o

@@ -1,0 +1,8 @@
+# Ignore model files
+*.gguf
+*.ggml
+*.bin
+
+# Ignore built binaries
+embedded-llama
+embedded-llama.exe

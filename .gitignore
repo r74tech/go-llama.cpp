@@ -13,3 +13,10 @@ Thumbs.db
 
 # model files downloaded by the test script
 ggllm-test-model.bin
+
+# patch artifacts
+*.orig
+*.rej
+
+# model files
+**/*.gguf

@@ -6,6 +6,12 @@ extern "C" {
 
 #include <stdbool.h>
 
+// Forward declaration for llama_load_model_from_buffer
+// NOTE: Currently not implemented in llama.cpp, using temporary file workaround
+// struct llama_model;
+// struct llama_context_params;
+// struct llama_model * llama_load_model_from_buffer(const void * buffer, size_t buffer_size, struct llama_context_params params);
+
 extern unsigned char tokenCallback(void *, char *);
 
 int load_state(void *ctx, char *statefile, char*modes);
@@ -31,6 +37,25 @@ void* load_model(const char *fname,
                  float rope_freq_scale,
                  bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity
                  );
+
+void* load_model_from_memory(const void* buffer,
+                             size_t buffer_size,
+                             int n_ctx, 
+                             int n_seed, 
+                             bool memory_f16, 
+                             bool mlock, 
+                             bool embeddings, 
+                             bool mmap, 
+                             bool low_vram, 
+                             int n_gpu, 
+                             int n_batch, 
+                             const char *maingpu, 
+                             const char *tensorsplit, 
+                             bool numa, 
+                             float rope_freq_base, 
+                             float rope_freq_scale,
+                             bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity
+                             );
 
 int get_embeddings(void* params_ptr, void* state_pr, float * res_embeddings);
 

@@ -2,7 +2,7 @@ package llama
 
 // #cgo CXXFLAGS: -I${SRCDIR}/llama.cpp/common -I${SRCDIR}/llama.cpp
 // #cgo LDFLAGS: -L${SRCDIR}/ -lbinding -lm -lstdc++
-// #cgo darwin LDFLAGS: -framework Accelerate
+// #cgo darwin LDFLAGS: -framework Accelerate -framework Foundation -framework Metal -framework MetalKit
 // #cgo darwin CXXFLAGS: -std=c++11
 // #include "binding.h"
 // #include <stdlib.h>
@@ -46,6 +46,39 @@ func New(model string, opts ...ModelOption) (*LLama, error) {
 
 	if result == nil {
 		return nil, fmt.Errorf("failed loading model")
+	}
+
+	ll := &LLama{state: result, contextSize: mo.ContextSize, embeddings: mo.Embeddings}
+	return ll, nil
+}
+
+func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
+	mo := NewModelOptions(opts...)
+	loraBase := C.CString(mo.LoraBase)
+	defer C.free(unsafe.Pointer(loraBase))
+	loraAdapter := C.CString(mo.LoraAdapter)
+	defer C.free(unsafe.Pointer(loraAdapter))
+
+	MulMatQ := true
+
+	if mo.MulMatQ != nil {
+		MulMatQ = *mo.MulMatQ
+	}
+
+	// Convert Go []byte to C pointer
+	dataPtr := unsafe.Pointer(&modelData[0])
+	dataSize := C.size_t(len(modelData))
+
+	result := C.load_model_from_memory(dataPtr, dataSize,
+		C.int(mo.ContextSize), C.int(mo.Seed),
+		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
+		C.int(mo.NGPULayers), C.int(mo.NBatch), C.CString(mo.MainGPU), C.CString(mo.TensorSplit), C.bool(mo.NUMA),
+		C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
+		C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
+	)
+
+	if result == nil {
+		return nil, fmt.Errorf("failed loading model from memory")
 	}
 
 	ll := &LLama{state: result, contextSize: mo.ContextSize, embeddings: mo.Embeddings}

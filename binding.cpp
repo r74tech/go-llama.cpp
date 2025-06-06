@@ -3,6 +3,7 @@
 
 #include "binding.h"
 #include "grammar-parser.h"
+#include "llama_data_source.h"
 #include <cassert>
 #include <cinttypes>
 #include <cmath>
@@ -15,6 +16,35 @@
 #include <vector>
 #include <sstream>
 #include <regex>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/wait.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <share.h>
+#define mkstemp(template) _mktemp_s(template, strlen(template)+1) ? -1 : _sopen(template, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _SH_DENYRW, _S_IREAD | _S_IWRITE)
+#define unlink _unlink
+#elif defined(__linux__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <unistd.h>
+#include <sys/syscall.h>
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+#ifndef __NR_memfd_create
+#define __NR_memfd_create 319
+#endif
+static inline int memfd_create(const char *name, unsigned int flags) {
+    return syscall(__NR_memfd_create, name, flags);
+}
+#else
+#include <sys/stat.h>
+#endif
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
 #include <unistd.h>
@@ -32,6 +62,24 @@ void sigint_handler(int signo) {
     }
 }
 #endif
+
+// Structure to hold both model and context
+struct llama_binding_state {
+    llama_model* model;
+    llama_context* ctx;
+};
+
+// Forward declarations
+void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity);
+
+llama_token llama_sample_token_binding(
+        struct llama_context * ctx,
+        struct llama_context * ctx_guidance,
+        struct llama_grammar * grammar,
+        void* params_ptr,
+        const std::vector<llama_token> & last_tokens,
+        std::vector<llama_token_data> & candidates,
+        int idx = -1);
 
 
 int get_embeddings(void* params_ptr, void* state_pr, float * res_embeddings) {
@@ -956,6 +1004,434 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
 
 void* load_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa, float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
    return load_binding_model(fname, n_ctx, n_seed, memory_f16, mlock, embeddings, mmap, low_vram, n_gpu_layers, n_batch, maingpu, tensorsplit, numa, rope_freq_base, rope_freq_scale, mul_mat_q, lora, lora_base, perplexity);
+}
+
+void* load_binding_model_from_memory(const void* buffer, size_t buffer_size, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
+    // Create gpt_params without model path
+    gpt_params * lparams = new gpt_params;
+    
+    llama_model * model;
+    llama_binding_state * state;
+    state = new llama_binding_state;
+    llama_context * ctx;
+    
+    lparams->n_ctx      = n_ctx;
+    lparams->seed       = n_seed;
+    lparams->memory_f16     = memory_f16;
+    lparams->embedding  = embeddings;
+    lparams->use_mlock  = mlock;
+    lparams->n_gpu_layers = n_gpu_layers;
+    lparams->perplexity = perplexity;
+    lparams->use_mmap = false; // Disable mmap for memory loading
+    
+    lparams->low_vram = low_vram;
+    if (rope_freq_base != 0.0f) {
+        lparams->rope_freq_base = rope_freq_base;
+    } else {
+        lparams->rope_freq_base = 10000.0f;
+    }
+    
+    if (rope_freq_scale != 0.0f) {
+        lparams->rope_freq_scale = rope_freq_scale;
+    } else {
+        lparams->rope_freq_scale =  1.0f;
+    }
+    
+    if (maingpu[0] != '\0') { 
+        lparams->main_gpu = std::stoi(maingpu);
+    }
+    
+    if (tensorsplit[0] != '\0') { 
+        std::string arg_next = tensorsplit;
+        // split string by , and /
+        const std::regex regex{R"([,/]+)"};
+        std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex, -1};
+        std::vector<std::string> split_arg{it, {}};
+        GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
+        
+        for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
+            if (i < split_arg.size()) {
+                lparams->tensor_split[i] = std::stof(split_arg[i]);
+            } else {
+                lparams->tensor_split[i] = 0.0f;
+            }
+        }  
+    }
+    
+    lparams->n_batch      = n_batch;
+    
+    llama_backend_init(numa);
+    
+    // Create context params from gpt_params
+    struct llama_context_params ctx_params = llama_context_params_from_gpt_params(*lparams);
+    
+    // Load model from memory buffer
+    fprintf(stderr, "%s: loading model from memory buffer (size: %zu bytes)\n", __func__, buffer_size);
+    
+    // Verify GGUF magic number
+    if (buffer_size < 4) {
+        fprintf(stderr, "%s: buffer too small\n", __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    uint32_t magic = *(const uint32_t*)buffer;
+    if (magic != 0x46554747) { // "GGUF" in little-endian
+        fprintf(stderr, "%s: invalid GGUF magic number: %08x\n", __func__, magic);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    fprintf(stderr, "%s: valid GGUF file detected, size: %zu MB\n", __func__, buffer_size / (1024*1024));
+    
+#ifdef __linux__
+    // On Linux, use memfd_create for in-memory file
+    int fd = memfd_create("llama_model", MFD_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "%s: error: memfd_create failed: %s\n", __func__, strerror(errno));
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    // Write the buffer to the memory file
+    ssize_t written = write(fd, buffer, buffer_size);
+    if (written != (ssize_t)buffer_size) {
+        fprintf(stderr, "%s: error: failed to write model to memory file\n", __func__);
+        close(fd);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    // Seek back to beginning
+    lseek(fd, 0, SEEK_SET);
+    
+    // Create a file path from file descriptor
+    char fd_path[256];
+    snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
+    
+    fprintf(stderr, "%s: loading model from memory file\n", __func__);
+    
+    // Load the model from the memory file
+    model = llama_load_model_from_file(fd_path, ctx_params);
+    
+    // Close the file descriptor
+    close(fd);
+    
+#elif defined(_WIN32)
+    // On Windows, we'll create a memory-backed temporary file using FILE_ATTRIBUTE_TEMPORARY
+    // and FILE_FLAG_DELETE_ON_CLOSE to avoid disk writes
+    
+    // Generate unique name
+    char temp_dir[MAX_PATH];
+    char temp_path[MAX_PATH];
+    GetTempPath(MAX_PATH, temp_dir);
+    
+    // Create unique filename
+    DWORD pid = GetCurrentProcessId();
+    DWORD tid = GetCurrentThreadId();
+    snprintf(temp_path, MAX_PATH, "%sllama_model_%u_%u.tmp", temp_dir, pid, tid);
+    
+    // Create file with special flags to keep it in memory
+    HANDLE hFile = CreateFile(
+        temp_path,
+        GENERIC_READ | GENERIC_WRITE,
+        0, // No sharing
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+        NULL
+    );
+    
+    if (hFile == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "%s: error: CreateFile failed: %lu\n", __func__, GetLastError());
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    // Write the buffer to the file
+    DWORD written = 0;
+    if (!WriteFile(hFile, buffer, (DWORD)buffer_size, &written, NULL) || written != buffer_size) {
+        fprintf(stderr, "%s: error: WriteFile failed: %lu\n", __func__, GetLastError());
+        CloseHandle(hFile);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    // Flush to ensure data is available
+    FlushFileBuffers(hFile);
+    
+    // Close the write handle but keep the file
+    CloseHandle(hFile);
+    
+    fprintf(stderr, "%s: loading model from memory-cached file: %s\n", __func__, temp_path);
+    
+    // Load the model - the file will be deleted automatically when closed
+    model = llama_load_model_from_file(temp_path, ctx_params);
+    
+    // The file is automatically deleted due to FILE_FLAG_DELETE_ON_CLOSE
+    
+#else
+    // Fallback: use regular temporary file
+    char temp_path[] = "/tmp/llama_model_XXXXXX";
+    int fd = mkstemp(temp_path);
+    if (fd < 0) {
+        fprintf(stderr, "%s: error: failed to create temporary file: %s\n", __func__, strerror(errno));
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    ssize_t written = write(fd, buffer, buffer_size);
+    close(fd);
+    
+    if (written != (ssize_t)buffer_size) {
+        fprintf(stderr, "%s: error: failed to write model to temporary file\n", __func__);
+        unlink(temp_path);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    fprintf(stderr, "%s: loading model from temporary file: %s\n", __func__, temp_path);
+    model = llama_load_model_from_file(temp_path, ctx_params);
+    unlink(temp_path);
+#endif
+    
+    if (model == nullptr) {
+        fprintf(stderr, "%s: error: failed loading model from temporary file\n", __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    fprintf(stderr, "%s: model loaded successfully from memory\n", __func__);
+    
+    // Create context with the loaded model
+    ctx = llama_new_context_with_model(model, ctx_params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context for model\n", __func__);
+        llama_free_model(model);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    state->model = model;
+    state->ctx = ctx;
+    
+    delete lparams;
+    return state;
+}
+
+void* load_model_from_memory(const void* buffer, size_t buffer_size, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa, float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
+   return load_binding_model_from_memory(buffer, buffer_size, n_ctx, n_seed, memory_f16, mlock, embeddings, mmap, low_vram, n_gpu_layers, n_batch, maingpu, tensorsplit, numa, rope_freq_base, rope_freq_scale, mul_mat_q, lora, lora_base, perplexity);
+}
+
+// Implementation of load_binding_model
+void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
+    // load the model
+    gpt_params * lparams = new gpt_params;
+    
+    llama_model * model;
+    llama_binding_state * state;
+    state = new llama_binding_state;
+    llama_context * ctx;
+    
+    lparams->model = fname;
+    lparams->n_ctx      = n_ctx;
+    lparams->seed       = n_seed;
+    lparams->memory_f16     = memory_f16;
+    lparams->embedding  = embeddings;
+    lparams->use_mlock  = mlock;
+    lparams->n_gpu_layers = n_gpu_layers;
+    lparams->perplexity = perplexity;
+    lparams->use_mmap = mmap;
+    
+    lparams->low_vram = low_vram;
+    if (rope_freq_base != 0.0f) {
+        lparams->rope_freq_base = rope_freq_base;
+    } else {
+        lparams->rope_freq_base = 10000.0f;
+    }
+    
+    if (rope_freq_scale != 0.0f) {
+        lparams->rope_freq_scale = rope_freq_scale;
+    } else {
+        lparams->rope_freq_scale =  1.0f;
+    }
+    
+    if (maingpu[0] != '\0') { 
+        lparams->main_gpu = std::stoi(maingpu);
+    }
+    
+    if (tensorsplit[0] != '\0') { 
+        std::string arg_next = tensorsplit;
+        // split string by , and /
+        const std::regex regex{R"([,/]+)"};
+        std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex, -1};
+        std::vector<std::string> split_arg{it, {}};
+        GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
+        
+        for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
+            if (i < split_arg.size()) {
+                lparams->tensor_split[i] = std::stof(split_arg[i]);
+            } else {
+                lparams->tensor_split[i] = 0.0f;
+            }
+        }  
+    }
+    
+    lparams->n_batch      = n_batch;
+    
+    if (lora != nullptr && lora[0] != '\0') {
+        lparams->lora_adapter = lora;
+        if (lora_base != nullptr && lora_base[0] != '\0') {
+            lparams->lora_base = lora_base;
+        }
+    }
+    
+    llama_backend_init(numa);
+    
+    // Use llama_context_params_from_gpt_params to create context params
+    struct llama_context_params ctx_params = llama_context_params_from_gpt_params(*lparams);
+    
+    // Load model
+    model = llama_load_model_from_file(fname, ctx_params);
+    if (model == NULL) {
+        fprintf(stderr, "%s: error: unable to load model\n", __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    // Create context with the loaded model
+    ctx = llama_new_context_with_model(model, ctx_params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context for model\n", __func__);
+        llama_free_model(model);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+    
+    state->ctx = ctx;
+    state->model = model;
+    
+    delete lparams;
+    return state;
+}
+
+// Implementation of llama_sample_token_binding
+llama_token llama_sample_token_binding(
+                  struct llama_context * ctx,
+                  struct llama_context * ctx_guidance,
+                  struct llama_grammar * grammar,
+                  void* params_ptr,
+        const std::vector<llama_token> & last_tokens,
+         std::vector<llama_token_data> & candidates,
+                                   int   idx) {
+    
+    gpt_params* g_params = (gpt_params*) params_ptr;
+    struct gpt_params params = *g_params;
+    const int n_ctx   = llama_n_ctx(ctx);
+    const int n_vocab = llama_n_vocab(ctx);
+    
+    const float   temp            = params.temp;
+    const int32_t top_k           = params.top_k <= 0 ? n_vocab : params.top_k;
+    const float   top_p           = params.top_p;
+    const float   tfs_z           = params.tfs_z;
+    const float   typical_p       = params.typical_p;
+    const int32_t repeat_last_n   = params.repeat_last_n < 0 ? n_ctx : params.repeat_last_n;
+    const float   repeat_penalty  = params.repeat_penalty;
+    const float   alpha_presence  = params.presence_penalty;
+    const float   alpha_frequency = params.frequency_penalty;
+    const int     mirostat        = params.mirostat;
+    const float   mirostat_tau    = params.mirostat_tau;
+    const float   mirostat_eta    = params.mirostat_eta;
+    const bool    penalize_nl     = params.penalize_nl;
+    
+    llama_token id = 0;
+    
+    float * logits = llama_get_logits(ctx) + idx * n_vocab;
+    
+    // Apply params.logit_bias map
+    for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
+        logits[it->first] += it->second;
+    }
+    
+    candidates.clear();
+    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+        candidates.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+    }
+    
+    llama_token_data_array cur_p = { candidates.data(), candidates.size(), false };
+    
+    if (ctx_guidance) {
+        llama_sample_classifier_free_guidance(ctx, &cur_p, ctx_guidance, params.cfg_scale);
+    }
+    
+    // apply penalties
+    if (!last_tokens.empty()) {
+        const float nl_logit = logits[llama_token_nl(ctx)];
+        const int last_n_repeat = std::min(std::min((int)last_tokens.size(), repeat_last_n), n_ctx);
+        
+        llama_sample_repetition_penalty(ctx, &cur_p,
+                last_tokens.data() + last_tokens.size() - last_n_repeat,
+                last_n_repeat, repeat_penalty);
+        llama_sample_frequency_and_presence_penalties(ctx, &cur_p,
+                last_tokens.data() + last_tokens.size() - last_n_repeat,
+                last_n_repeat, alpha_frequency, alpha_presence);
+        
+        if (!penalize_nl) {
+            for (size_t idx = 0; idx < cur_p.size; idx++) {
+                if (cur_p.data[idx].id == llama_token_nl(ctx)) {
+                    cur_p.data[idx].logit = nl_logit;
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (grammar != NULL) {
+        llama_sample_grammar(ctx, &cur_p, grammar);
+    }
+    
+    if (temp <= 0) {
+        // Greedy sampling
+        id = llama_sample_token_greedy(ctx, &cur_p);
+    } else {
+        if (mirostat == 1) {
+            static float mirostat_mu = 2.0f * mirostat_tau;
+            const int mirostat_m = 100;
+            llama_sample_temperature(ctx, &cur_p, temp);
+            id = llama_sample_token_mirostat(ctx, &cur_p, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
+        } else if (mirostat == 2) {
+            static float mirostat_mu = 2.0f * mirostat_tau;
+            llama_sample_temperature(ctx, &cur_p, temp);
+            id = llama_sample_token_mirostat_v2(ctx, &cur_p, mirostat_tau, mirostat_eta, &mirostat_mu);
+        } else {
+            // Temperature sampling
+            llama_sample_top_k      (ctx, &cur_p, top_k, 1);
+            llama_sample_tail_free  (ctx, &cur_p, tfs_z, 1);
+            llama_sample_typical    (ctx, &cur_p, typical_p, 1);
+            llama_sample_top_p      (ctx, &cur_p, top_p, 1);
+            llama_sample_temperature(ctx, &cur_p, temp);
+            
+            id = llama_sample_token(ctx, &cur_p);
+        }
+    }
+    
+    if (grammar != NULL) {
+        llama_grammar_accept_token(ctx, grammar, id);
+    }
+    
+    return id;
 }
 
 /*

@@ -1,0 +1,470 @@
+diff --git a/ggml.c b/ggml.c
+index 1234567..abcdefg 100644
+--- a/ggml.c
++++ b/ggml.c
+@@ -19700,3 +19700,17 @@ static bool gguf_fread_el(FILE * file, void * dst, size_t size, size_t * offset
+     return n == size;
+ }
+ 
++// Memory-based reading function
++static bool gguf_mread_el(const void * buffer, size_t buffer_size, void * dst, size_t size, size_t * offset) {
++    if (*offset + size > buffer_size) {
++        return false;
++    }
++    memcpy(dst, (const char *)buffer + *offset, size);
++    *offset += size;
++    return true;
++}
++
++struct gguf_buf_context {
++    const void * data;
++    size_t size;
++};
++
+ // NOTE: temporary handling of GGUFv1 >> remove after Oct 2023
+ static bool gguf_fread_str_cur(FILE * file, struct gguf_str * p, size_t * offset) {
+     p->n    = 0;
+     p->data = NULL;
+ 
+     bool ok = true;
+ 
+     ok = ok && gguf_fread_el(file, &p->n,    sizeof(p->n), offset); p->data = calloc(p->n + 1, 1);
+     ok = ok && gguf_fread_el(file,  p->data, p->n,         offset);
+ 
+     return ok;
+ }
+ 
+@@ -20060,6 +20074,223 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_
+     fclose(file);
+ 
+     return ctx;
+ }
+ 
++// Memory-based version of string reading functions
++static bool gguf_mread_str_cur(const void * buffer, size_t buffer_size, struct gguf_str * p, size_t * offset) {
++    p->n    = 0;
++    p->data = NULL;
++
++    bool ok = true;
++
++    ok = ok && gguf_mread_el(buffer, buffer_size, &p->n, sizeof(p->n), offset); 
++    p->data = calloc(p->n + 1, 1);
++    ok = ok && gguf_mread_el(buffer, buffer_size, p->data, p->n, offset);
++
++    return ok;
++}
++
++static bool gguf_mread_str_v1(const void * buffer, size_t buffer_size, struct gguf_str * p, size_t * offset) {
++    p->n    = 0;
++    p->data = NULL;
++
++    bool ok = true;
++
++    uint32_t n = 0;
++    ok = ok && gguf_mread_el(buffer, buffer_size, &n, sizeof(n), offset); 
++    p->data = calloc(n + 1, 1); 
++    p->n = n;
++    ok = ok && gguf_mread_el(buffer, buffer_size, p->data, p->n, offset);
++
++    return ok;
++}
++
++struct gguf_context * gguf_init_from_buffer(const void * buffer, size_t buffer_size, struct gguf_init_params params) {
++    if (buffer == NULL || buffer_size == 0) {
++        return NULL;
++    }
++
++    // offset from start of buffer
++    size_t offset = 0;
++
++    uint32_t magic = 0;
++
++    // check the magic before making allocations
++    {
++        if (!gguf_mread_el(buffer, buffer_size, &magic, sizeof(magic), &offset)) {
++            return NULL;
++        }
++
++        if (magic != GGUF_MAGIC) {
++            fprintf(stderr, "%s: invalid magic number %08x\n", __func__, magic);
++            return NULL;
++        }
++    }
++
++    bool ok = true;
++
++    struct gguf_context * ctx = GGML_ALIGNED_MALLOC(sizeof(struct gguf_context));
++
++    // read the header
++    {
++        ctx->header.magic = magic;
++
++        ctx->kv    = NULL;
++        ctx->infos = NULL;
++        ctx->data  = NULL;
++
++        ok = ok && gguf_mread_el(buffer, buffer_size, &ctx->header.version, sizeof(ctx->header.version), &offset);
++
++        if (ctx->header.version == 1) {
++            uint32_t n_tensors = 0;
++            uint32_t n_kv      = 0;
++
++            ok = ok && gguf_mread_el(buffer, buffer_size, &n_tensors, sizeof(n_tensors), &offset);
++            ok = ok && gguf_mread_el(buffer, buffer_size, &n_kv, sizeof(n_kv), &offset);
++
++            ctx->header.n_tensors = n_tensors;
++            ctx->header.n_kv      = n_kv;
++        } else {
++            ok = ok && gguf_mread_el(buffer, buffer_size, &ctx->header.n_tensors, sizeof(ctx->header.n_tensors), &offset);
++            ok = ok && gguf_mread_el(buffer, buffer_size, &ctx->header.n_kv, sizeof(ctx->header.n_kv), &offset);
++        }
++
++        if (!ok) {
++            fprintf(stderr, "%s: failed to read header\n", __func__);
++            GGML_ALIGNED_FREE(ctx);
++            return NULL;
++        }
++    }
++
++    // read the kv pairs
++    {
++        ctx->kv = malloc(ctx->header.n_kv * sizeof(struct gguf_kv));
++
++        for (uint32_t i = 0; i < ctx->header.n_kv; ++i) {
++            struct gguf_kv * kv = &ctx->kv[i];
++
++            if (ctx->header.version == 1) {
++                ok = ok && gguf_mread_str_v1(buffer, buffer_size, &kv->key, &offset);
++            } else {
++                ok = ok && gguf_mread_str_cur(buffer, buffer_size, &kv->key, &offset);
++            }
++            if (!ok) {
++                break;
++            }
++            ok = ok && gguf_mread_el(buffer, buffer_size, &kv->type, sizeof(kv->type), &offset);
++            if (!ok) {
++                break;
++            }
++
++            switch (kv->type) {
++                case GGUF_TYPE_UINT8:   ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.uint8,   sizeof(kv->value.uint8),   &offset); break;
++                case GGUF_TYPE_INT8:    ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.int8,    sizeof(kv->value.int8),    &offset); break;
++                case GGUF_TYPE_UINT16:  ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.uint16,  sizeof(kv->value.uint16),  &offset); break;
++                case GGUF_TYPE_INT16:   ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.int16,   sizeof(kv->value.int16),   &offset); break;
++                case GGUF_TYPE_UINT32:  ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.uint32,  sizeof(kv->value.uint32),  &offset); break;
++                case GGUF_TYPE_INT32:   ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.int32,   sizeof(kv->value.int32),   &offset); break;
++                case GGUF_TYPE_FLOAT32: ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.float32, sizeof(kv->value.float32), &offset); break;
++                case GGUF_TYPE_UINT64:  ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.uint64,  sizeof(kv->value.uint64),  &offset); break;
++                case GGUF_TYPE_INT64:   ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.int64,   sizeof(kv->value.int64),   &offset); break;
++                case GGUF_TYPE_FLOAT64: ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.float64, sizeof(kv->value.float64), &offset); break;
++                case GGUF_TYPE_BOOL:    ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.bool_,   sizeof(kv->value.bool_),   &offset); break;
++                case GGUF_TYPE_STRING:
++                    {
++                        if (ctx->header.version == 1) {
++                            ok = ok && gguf_mread_str_v1(buffer, buffer_size, &kv->value.str, &offset);
++                        } else {
++                            ok = ok && gguf_mread_str_cur(buffer, buffer_size, &kv->value.str, &offset);
++                        }
++                    } break;
++                case GGUF_TYPE_ARRAY:
++                    {
++                        ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.arr.type, sizeof(kv->value.arr.type), &offset);
++                        ok = ok && gguf_mread_el(buffer, buffer_size, &kv->value.arr.n, sizeof(kv->value.arr.n), &offset);
++
++                        switch (kv->value.arr.type) {
++                            case GGUF_TYPE_UINT8:
++                            case GGUF_TYPE_INT8:
++                            case GGUF_TYPE_UINT16:
++                            case GGUF_TYPE_INT16:
++                            case GGUF_TYPE_UINT32:
++                            case GGUF_TYPE_INT32:
++                            case GGUF_TYPE_FLOAT32:
++                            case GGUF_TYPE_UINT64:
++                            case GGUF_TYPE_INT64:
++                            case GGUF_TYPE_FLOAT64:
++                            case GGUF_TYPE_BOOL:
++                                {
++                                    kv->value.arr.data = malloc(kv->value.arr.n * GGUF_TYPE_SIZE[kv->value.arr.type]);
++                                    ok = ok && gguf_mread_el(buffer, buffer_size, kv->value.arr.data, kv->value.arr.n * GGUF_TYPE_SIZE[kv->value.arr.type], &offset);
++                                } break;
++                            case GGUF_TYPE_STRING:
++                                {
++                                    kv->value.arr.data = malloc(kv->value.arr.n * sizeof(struct gguf_str));
++                                    for (uint32_t j = 0; j < kv->value.arr.n; ++j) {
++                                        if (ctx->header.version == 1) {
++                                            ok = ok && gguf_mread_str_v1(buffer, buffer_size, &((struct gguf_str *) kv->value.arr.data)[j], &offset);
++                                        } else {
++                                            ok = ok && gguf_mread_str_cur(buffer, buffer_size, &((struct gguf_str *) kv->value.arr.data)[j], &offset);
++                                        }
++                                    }
++                                } break;
++                            case GGUF_TYPE_ARRAY:
++                            case GGUF_TYPE_COUNT: GGML_ASSERT(false && "invalid type"); break;
++                        };
++                    } break;
++                case GGUF_TYPE_COUNT: GGML_ASSERT(false && "invalid type");
++            };
++
++            if (!ok) {
++                break;
++            }
++        }
++
++        if (!ok) {
++            fprintf(stderr, "%s: failed to read key-value pairs\n", __func__);
++            gguf_free(ctx);
++            return NULL;
++        }
++    }
++
++    // read the tensor infos
++    {
++        ctx->infos = malloc(ctx->header.n_tensors * sizeof(struct gguf_tensor_info));
++
++        for (uint32_t i = 0; i < ctx->header.n_tensors; ++i) {
++            struct gguf_tensor_info * info = &ctx->infos[i];
++
++            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
++                info->ne[j] = 1;
++            }
++
++            if (ctx->header.version == 1) {
++                ok = ok && gguf_mread_str_v1(buffer, buffer_size, &info->name, &offset);
++            } else {
++                ok = ok && gguf_mread_str_cur(buffer, buffer_size, &info->name, &offset);
++            }
++            ok = ok && gguf_mread_el(buffer, buffer_size, &info->n_dims, sizeof(info->n_dims), &offset);
++            for (uint32_t j = 0; j < info->n_dims; ++j) {
++                if (ctx->header.version == 1) {
++                    ok = ok && gguf_mread_el(buffer, buffer_size, &info->ne[j], sizeof(info->ne[j]), &offset);
++                } else {
++                    ok = ok && gguf_mread_el(buffer, buffer_size, &info->ne[j], sizeof(info->ne[j]), &offset);
++                }
++            }
++            ok = ok && gguf_mread_el(buffer, buffer_size, &info->type, sizeof(info->type), &offset);
++            ok = ok && gguf_mread_el(buffer, buffer_size, &info->offset, sizeof(info->offset), &offset);
++
++            if (!ok) {
++                fprintf(stderr, "%s: failed to read tensor info\n", __func__);
++                gguf_free(ctx);
++                return NULL;
++            }
++        }
++    }
++
++    ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
++
++    int alignment_idx = gguf_find_key(ctx, "general.alignment");
++    if (alignment_idx != -1) {
++        ctx->alignment = gguf_get_val_u32(ctx, alignment_idx);
++    }
++
++    // Store the buffer info if we're not loading the tensor data
++    if (params.no_alloc) {
++        ctx->data = (void *)buffer;
++    }
++
++    return ctx;
++}
++
+ void gguf_free(struct gguf_context * ctx) {
+     if (ctx == NULL) {
+         return;
+diff --git a/ggml.h b/ggml.h
+index 1234567..abcdefg 100644
+--- a/ggml.h
++++ b/ggml.h
+@@ -1877,7 +1877,7 @@ extern "C" {
+     GGML_API struct gguf_context * gguf_init_empty(void);
+     GGML_API struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params);
+-    //GGML_API struct gguf_context * gguf_init_from_buffer(..);
++    GGML_API struct gguf_context * gguf_init_from_buffer(const void * buffer, size_t buffer_size, struct gguf_init_params params);
+ 
+     GGML_API void gguf_free(struct gguf_context * ctx);
+ 
+diff --git a/llama.cpp b/llama.cpp
+index 1234567..abcdefg 100644
+--- a/llama.cpp
++++ b/llama.cpp
+@@ -2596,6 +2596,131 @@ struct llama_model_loader {
+         }
+     }
+ 
++    // Add these member variables
++    const void * buffer_data = nullptr;
++    size_t buffer_size = 0;
++
++    // Constructor for memory-based loading
++    llama_model_loader(const void * buffer, size_t buffer_size, bool use_mmap) {
++        // Initialize member variables
++        ctx_gguf = nullptr;
++        ctx_meta = nullptr;
++        
++        // Parse GGUF from memory
++        struct gguf_init_params params = {
++            /*.no_alloc = */ true,
++            /*.ctx      = */ &ctx_meta,
++        };
++        ctx_gguf = gguf_init_from_buffer(buffer, buffer_size, params);
++        if (!ctx_gguf) {
++            throw std::runtime_error("failed to load model from buffer");
++        }
++
++        get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
++        llm_kv = LLM_KV(llm_arch_from_string(arch_name));
++
++        n_kv      = gguf_get_n_kv(ctx_gguf);
++        n_tensors = gguf_get_n_tensors(ctx_gguf);
++
++        // Load all tensor info into a vector
++        tensors_map.reserve(n_tensors);
++        for (int i = 0; i < n_tensors; i++) {
++            const char * name = gguf_get_tensor_name(ctx_gguf, i);
++            struct gguf_tensor_info * info = (struct gguf_tensor_info *) gguf_get_tensor_info(ctx_gguf, i);
++            tensors_map.emplace(name, llama_tensor_info{(uint32_t)i, info->ne, info->n_dims, info->type, info->offset});
++        }
++
++        // Calculate total size
++        size_data = 0;
++        for (int i = 0; i < n_tensors; i++) {
++            struct gguf_tensor_info * info = (struct gguf_tensor_info *) gguf_get_tensor_info(ctx_gguf, i);
++            size_data += ggml_nbytes_pad(ggml_row_size(info->type, info->ne[0]), info->ne[1]) * info->ne[2] * info->ne[3];
++        }
++
++        // Store buffer data
++        this->buffer_data = buffer;
++        this->buffer_size = buffer_size;
++        this->use_mmap = false;  // Always false for memory buffers
++        
++        // Find data offset in buffer
++        size_t meta_size = gguf_get_meta_size(ctx_gguf);
++        size_t data_offset = GGUF_HEADER_SIZE + meta_size;
++        data_offset = (data_offset + ctx_gguf->alignment - 1) & ~(ctx_gguf->alignment - 1);
++        
++        if (data_offset + size_data > buffer_size) {
++            throw std::runtime_error("buffer too small for model data");
++        }
++
++        LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from buffer (version %s)\n",
++                __func__, n_kv, n_tensors, llama_file_version_name(llama_file_version(ctx_gguf)));
++    }
++
++    // Modified load_data_for to handle memory buffers
++    size_t load_data_for(struct ggml_tensor * cur) const {
++        if (buffer_data != nullptr) {
++            // Load from memory buffer
++            const auto & info = tensors_map.at(ggml_get_name(cur));
++            
++            // Find data offset in buffer
++            size_t meta_size = gguf_get_meta_size(ctx_gguf);
++            size_t data_offset = GGUF_HEADER_SIZE + meta_size;
++            data_offset = (data_offset + ctx_gguf->alignment - 1) & ~(ctx_gguf->alignment - 1);
++            
++            size_t tensor_offset = data_offset + info.offset;
++            size_t tensor_size = ggml_nbytes(cur);
++            
++            if (tensor_offset + tensor_size > buffer_size) {
++                throw std::runtime_error("tensor data out of bounds");
++            }
++            
++            memcpy(cur->data, (const char *)buffer_data + tensor_offset, tensor_size);
++            
++            return tensor_size;
++        }
++        
++        // Original file-based loading code...
++        // First, check if the file is loaded
++        const int i_file = file_idx[ggml_get_name(cur)];
++        if (i_file >= 0) {
++            // load from file
++            const auto & file = files[i_file];
++            const auto & info = tensors_map.at(ggml_get_name(cur));
++            
++            const size_t size_cur = ggml_nbytes(cur);
++            
++            if (use_mmap) {
++                // if mmap is enabled, map the file and copy the data
++                const size_t size_max = (cur->ne[0]*cur->ne[1]*cur->ne[2] + cur->ne[3] - 1)*ggml_type_size(cur->type)/ggml_blck_size(cur->type);
++                void * addr = mmap(NULL, size_max, PROT_READ | PROT_WRITE, MAP_PRIVATE, file.fd, info.offset);
++                if (addr == MAP_FAILED) {
++                    throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
++                }
++                
++                if (cur->data == NULL) {
++                    // if the tensor data has not been allocated, do it now
++                    cur->data = addr;
++                } else {
++                    // otherwise, copy the data to the existing allocation
++                    memcpy(cur->data, addr, size_cur);
++                    munmap(addr, size_max);
++                }
++            } else {
++                // if mmap is disabled, read the data from the file
++                file.seek(info.offset, SEEK_SET);
++                file.read_raw(cur->data, size_cur);
++            }
++            
++            return size_cur;
++        }
++        
++        throw std::runtime_error(format("tensor '%s' not found", ggml_get_name(cur)));
++    }
++
+     void load_all_data(struct ggml_context * ctx, llama_progress_callback progress_callback, void * progress_callback_user_data, llama_mlock * lmlock) {
+         size_t size_data = 0;
+         size_t size_lock = 0;
+@@ -6294,6 +6419,32 @@ struct llama_model * llama_load_model_from_file(
+     return model;
+ }
+ 
++struct llama_model * llama_load_model_from_buffer(
++        const void * buffer,
++        size_t buffer_size,
++        struct llama_context_params params) {
++    
++    llama_model * model = new llama_model;
++
++    ggml_time_init();
++    unsigned t_start_us = ggml_time_us();
++
++    try {
++        llama_model_loader ml(buffer, buffer_size, params.use_mmap);
++
++        model->hparams.vocab_only = params.vocab_only;
++
++        llm_load_arch   (ml, *model);
++        llm_load_hparams(ml, *model, params.n_gpu_layers, params.main_gpu, params.tensor_split);
++        llm_load_vocab  (ml, *model);
++        llm_load_print_meta(ml, *model);
++        llm_load_tensors(ml, *model, params.n_gpu_layers, params.main_gpu, params.tensor_split, params.mul_mat_q, params.low_vram, params.use_mlock, params.progress_callback, params.progress_callback_user_data);
++    } catch (const std::exception & err) {
++        LLAMA_LOG_ERROR("error loading model from buffer: %s\n", err.what());
++        delete model;
++        return nullptr;
++    }
++
++    unsigned t_end_us = ggml_time_us();
++    model->t_load_us = t_end_us - t_start_us;
++
++    return model;
++}
++
+ void llama_free_model(struct llama_model * model) {
+     delete model;
+ }
+diff --git a/llama.h b/llama.h
+index 1234567..abcdefg 100644
+--- a/llama.h
++++ b/llama.h
+@@ -217,6 +217,11 @@ extern "C" {
+                             const char * path_model,
+             struct llama_context_params   params);
+ 
++    LLAMA_API struct llama_model * llama_load_model_from_buffer(
++                             const void * buffer,
++                                   size_t   buffer_size,
++            struct llama_context_params   params);
++
+     LLAMA_API void llama_free_model(struct llama_model * model);
+ 
+     LLAMA_API struct llama_context * llama_new_context_with_model(
