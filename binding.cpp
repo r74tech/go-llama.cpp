@@ -1127,59 +1127,13 @@ void* load_binding_model_from_memory(const void* buffer, size_t buffer_size, int
     close(fd);
     
 #elif defined(_WIN32)
-    // On Windows, we'll create a memory-backed temporary file using FILE_ATTRIBUTE_TEMPORARY
-    // and FILE_FLAG_DELETE_ON_CLOSE to avoid disk writes
-    
-    // Generate unique name
-    char temp_dir[MAX_PATH];
-    char temp_path[MAX_PATH];
-    GetTempPath(MAX_PATH, temp_dir);
-    
-    // Create unique filename
-    DWORD pid = GetCurrentProcessId();
-    DWORD tid = GetCurrentThreadId();
-    snprintf(temp_path, MAX_PATH, "%sllama_model_%u_%u.tmp", temp_dir, pid, tid);
-    
-    // Create file with special flags to keep it in memory
-    HANDLE hFile = CreateFile(
-        temp_path,
-        GENERIC_READ | GENERIC_WRITE,
-        0, // No sharing
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        NULL
-    );
-    
-    if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "%s: error: CreateFile failed: %lu\n", __func__, GetLastError());
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    // Write the buffer to the file
-    DWORD written = 0;
-    if (!WriteFile(hFile, buffer, (DWORD)buffer_size, &written, NULL) || written != buffer_size) {
-        fprintf(stderr, "%s: error: WriteFile failed: %lu\n", __func__, GetLastError());
-        CloseHandle(hFile);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    // Flush to ensure data is available
-    FlushFileBuffers(hFile);
-    
-    // Close the write handle but keep the file
-    CloseHandle(hFile);
-    
-    fprintf(stderr, "%s: loading model from memory-cached file: %s\n", __func__, temp_path);
-    
-    // Load the model - the file will be deleted automatically when closed
-    model = llama_load_model_from_file(temp_path, ctx_params);
-    
-    // The file is automatically deleted due to FILE_FLAG_DELETE_ON_CLOSE
+    // Windows doesn't have memfd_create, but we need to implement memory loading
+    // Since llama.cpp requires a file path, we need to patch it to support memory buffers
+    fprintf(stderr, "%s: error: memory loading not yet implemented for Windows\n", __func__);
+    fprintf(stderr, "%s: llama.cpp needs to be patched with memory buffer support\n", __func__);
+    delete lparams;
+    delete state;
+    return nullptr;
     
 #else
     // Fallback: use regular temporary file
