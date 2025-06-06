@@ -31,8 +31,9 @@
 #define _GNU_SOURCE
 #endif
 #include <unistd.h>
-#include <sys/mman.h>
 #include <sys/syscall.h>
+// Include sys/mman.h after defining _GNU_SOURCE to get memfd_create declaration
+#include <sys/mman.h>
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001U
 #endif
@@ -67,13 +68,14 @@ void sigint_handler(int signo) {
 #endif
 
 // Structure to hold both model and context
-struct llama_binding_model_state {
-    llama_model* model;
+// Note: This matches the llama_binding_state structure defined in the patched common.h
+struct llama_binding_state {
     llama_context* ctx;
+    llama_model* model;
 };
 
 // Forward declarations
-void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity);
+// Note: load_binding_model is now provided by common.cpp via the patch
 
 llama_token llama_sample_token_binding(
         struct llama_context * ctx,
@@ -87,7 +89,7 @@ llama_token llama_sample_token_binding(
 
 int get_embeddings(void* params_ptr, void* state_pr, float * res_embeddings) {
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* state = (llama_binding_model_state*) state_pr;
+    llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
     gpt_params params = *params_p;
 
@@ -126,7 +128,7 @@ int get_embeddings(void* params_ptr, void* state_pr, float * res_embeddings) {
 
 int get_token_embeddings(void* params_ptr, void* state_pr,  int *tokens, int tokenSize, float * res_embeddings) {
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* state = (llama_binding_model_state*) state_pr;
+    llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
     gpt_params params = *params_p;
  
@@ -142,7 +144,7 @@ int get_token_embeddings(void* params_ptr, void* state_pr,  int *tokens, int tok
 
 int eval(void* params_ptr,void* state_pr,char *text) {
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* state = (llama_binding_model_state*) state_pr;
+    llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
 
     auto n_past = 0;
@@ -169,7 +171,7 @@ static std::vector<llama_token> * g_output_tokens;
 
 int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* state = (llama_binding_model_state*) state_pr;
+    llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
 
     gpt_params params = *params_p;
@@ -381,7 +383,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
             // Ensure the input doesn't exceed the context size by truncating embd if necessary.
             if ((int)embd.size() > max_embd_size) {
                 const int skipped_tokens = (int) embd.size() - max_embd_size;
-                printf("<<input too long: skipped %zu token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
+                printf("<<input too long: skipped %d token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
                 embd.resize(max_embd_size);
             }
             // infinite text generation via context swapping
@@ -614,8 +616,8 @@ end:
 int speculative_sampling(void* params_ptr, void* target_model, void* draft_model, char* result, bool debug) {
 
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* target_model_state = (llama_binding_model_state*) target_model;
-    llama_binding_model_state* draft_model_state = (llama_binding_model_state*) draft_model;
+    llama_binding_state* target_model_state = (llama_binding_state*) target_model;
+    llama_binding_state* draft_model_state = (llama_binding_state*) draft_model;
 
     gpt_params params = *params_p;
     llama_context * ctx_tgt = target_model_state->ctx;
@@ -855,7 +857,7 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
 }
 
 void llama_binding_free_model(void *state_ptr) {
-    llama_binding_model_state* ctx = (llama_binding_model_state*) state_ptr;
+    llama_binding_state* ctx = (llama_binding_state*) state_ptr;
     llama_free(ctx->ctx);
     llama_free_model(ctx->model);
     delete ctx;
@@ -868,7 +870,7 @@ void llama_free_params(void* params_ptr) {
 
 int llama_tokenize_string(void* params_ptr, void* state_pr, int* result) {
     gpt_params* params_p = (gpt_params*) params_ptr;
-    llama_binding_model_state* state = (llama_binding_model_state*) state_pr;
+    llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
 
     const bool add_bos = llama_vocab_type(ctx) == LLAMA_VOCAB_TYPE_SPM;
@@ -1015,8 +1017,8 @@ void* load_binding_model_from_memory(const void* buffer, size_t buffer_size, int
     gpt_params * lparams = new gpt_params;
     
     llama_model * model;
-    llama_binding_model_state * state;
-    state = new llama_binding_model_state;
+    llama_binding_state * state;
+    state = new llama_binding_state;
     llama_context * ctx;
     
     lparams->n_ctx      = n_ctx;
@@ -1237,99 +1239,8 @@ void* load_model_from_memory(const void* buffer, size_t buffer_size, int n_ctx, 
    return load_binding_model_from_memory(buffer, buffer_size, n_ctx, n_seed, memory_f16, mlock, embeddings, mmap, low_vram, n_gpu_layers, n_batch, maingpu, tensorsplit, numa, rope_freq_base, rope_freq_scale, mul_mat_q, lora, lora_base, perplexity);
 }
 
-// Implementation of load_binding_model
-void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
-    // load the model
-    gpt_params * lparams = new gpt_params;
-    
-    llama_model * model;
-    llama_binding_model_state * state;
-    state = new llama_binding_model_state;
-    llama_context * ctx;
-    
-    lparams->model = fname;
-    lparams->n_ctx      = n_ctx;
-    lparams->seed       = n_seed;
-    lparams->memory_f16     = memory_f16;
-    lparams->embedding  = embeddings;
-    lparams->use_mlock  = mlock;
-    lparams->n_gpu_layers = n_gpu_layers;
-    lparams->perplexity = perplexity;
-    lparams->use_mmap = mmap;
-    
-    lparams->low_vram = low_vram;
-    if (rope_freq_base != 0.0f) {
-        lparams->rope_freq_base = rope_freq_base;
-    } else {
-        lparams->rope_freq_base = 10000.0f;
-    }
-    
-    if (rope_freq_scale != 0.0f) {
-        lparams->rope_freq_scale = rope_freq_scale;
-    } else {
-        lparams->rope_freq_scale =  1.0f;
-    }
-    
-    if (maingpu[0] != '\0') { 
-        lparams->main_gpu = std::stoi(maingpu);
-    }
-    
-    if (tensorsplit[0] != '\0') { 
-        std::string arg_next = tensorsplit;
-        // split string by , and /
-        const std::regex regex{R"([,/]+)"};
-        std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex, -1};
-        std::vector<std::string> split_arg{it, {}};
-        GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
-        
-        for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
-            if (i < split_arg.size()) {
-                lparams->tensor_split[i] = std::stof(split_arg[i]);
-            } else {
-                lparams->tensor_split[i] = 0.0f;
-            }
-        }  
-    }
-    
-    lparams->n_batch      = n_batch;
-    
-    if (lora != nullptr && lora[0] != '\0') {
-        lparams->lora_adapter = lora;
-        if (lora_base != nullptr && lora_base[0] != '\0') {
-            lparams->lora_base = lora_base;
-        }
-    }
-    
-    llama_backend_init(numa);
-    
-    // Use llama_context_params_from_gpt_params to create context params
-    struct llama_context_params ctx_params = llama_context_params_from_gpt_params(*lparams);
-    
-    // Load model
-    model = llama_load_model_from_file(fname, ctx_params);
-    if (model == NULL) {
-        fprintf(stderr, "%s: error: unable to load model\n", __func__);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    // Create context with the loaded model
-    ctx = llama_new_context_with_model(model, ctx_params);
-    if (ctx == NULL) {
-        fprintf(stderr, "%s: error: failed to create context for model\n", __func__);
-        llama_free_model(model);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    state->ctx = ctx;
-    state->model = model;
-    
-    delete lparams;
-    return state;
-}
+// The load_binding_model implementation is now provided by the patched common.cpp
+// We just need to make sure our code uses the correct structure type
 
 // Implementation of llama_sample_token_binding
 llama_token llama_sample_token_binding(
@@ -1496,8 +1407,8 @@ void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f
     lparams = create_gpt_params(fname, lora, lora_base);
 #endif
     llama_model * model;
-    llama_binding_model_state * state;
-    state = new llama_binding_model_state;
+    llama_binding_state * state;
+    state = new llama_binding_state;
     llama_context * ctx;
     lparams->n_ctx      = n_ctx;
     lparams->seed       = n_seed;
