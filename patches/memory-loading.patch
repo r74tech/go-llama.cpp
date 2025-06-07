@@ -1,5 +1,5 @@
 diff --git a/ggml.c b/ggml.c
-index a0be068d..8d288d0f 100644
+index a0be068d..9a6dea30 100644
 --- a/ggml.c
 +++ b/ggml.c
 @@ -19700,6 +19700,21 @@ static bool gguf_fread_el(FILE * file, void * dst, size_t size, size_t * offset)
@@ -289,6 +289,58 @@ index a0be068d..8d288d0f 100644
  void gguf_free(struct gguf_context * ctx) {
      if (ctx == NULL) {
          return;
+@@ -20120,6 +20393,10 @@ const char * gguf_type_name(enum gguf_type type) {
+ }
+ 
+ int gguf_get_version(const struct gguf_context * ctx) {
++    if (!ctx) {
++        fprintf(stderr, "%s: ERROR: ctx is NULL\n", __func__);
++        return 0;
++    }
+     return ctx->header.version;
+ }
+ 
+@@ -20136,6 +20413,10 @@ void * gguf_get_data(const struct gguf_context * ctx) {
+ }
+ 
+ int gguf_get_n_kv(const struct gguf_context * ctx) {
++    if (!ctx) {
++        fprintf(stderr, "%s: ERROR: ctx is NULL\n", __func__);
++        return 0;
++    }
+     return ctx->header.n_kv;
+ }
+ 
+@@ -20230,6 +20511,10 @@ const char * gguf_get_val_str (const struct gguf_context * ctx, int i) {
+ }
+ 
+ int gguf_get_n_tensors(const struct gguf_context * ctx) {
++    if (!ctx) {
++        fprintf(stderr, "%s: ERROR: ctx is NULL\n", __func__);
++        return 0;
++    }
+     return ctx->header.n_tensors;
+ }
+ 
+@@ -20254,6 +20539,18 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int i) {
+ }
+ 
+ char * gguf_get_tensor_name(const struct gguf_context * ctx, int i) {
++    if (!ctx) {
++        fprintf(stderr, "%s: ERROR: ctx is NULL\n", __func__);
++        return NULL;
++    }
++    if (!ctx->infos) {
++        fprintf(stderr, "%s: ERROR: ctx->infos is NULL\n", __func__);
++        return NULL;
++    }
++    if (i < 0 || i >= ctx->header.n_tensors) {
++        fprintf(stderr, "%s: ERROR: tensor index %d out of bounds (n_tensors=%d)\n", __func__, i, ctx->header.n_tensors);
++        return NULL;
++    }
+     return ctx->infos[i].name.data;
+ }
+ 
 diff --git a/ggml.h b/ggml.h
 index b2251ace..87c9408c 100644
 --- a/ggml.h
@@ -303,7 +355,7 @@ index b2251ace..87c9408c 100644
      GGML_API void gguf_free(struct gguf_context * ctx);
  
 diff --git a/llama.cpp b/llama.cpp
-index 6e23a077..1dfab746 100644
+index 6e23a077..5855d5aa 100644
 --- a/llama.cpp
 +++ b/llama.cpp
 @@ -1280,6 +1280,11 @@ struct llama_model_loader {
@@ -318,7 +370,7 @@ index 6e23a077..1dfab746 100644
      size_t  n_bytes    = 0;
  
      bool use_mmap = false;
-@@ -1293,6 +1298,95 @@ struct llama_model_loader {
+@@ -1293,6 +1298,128 @@ struct llama_model_loader {
      struct gguf_context * ctx_gguf = NULL;
      struct ggml_context * ctx_meta = NULL;
  
@@ -330,28 +382,60 @@ index 6e23a077..1dfab746 100644
 +        file("/dev/null", "rb"),
 +#endif
 +        use_mmap(false), buffer_data(buffer), buffer_size(size) {
++        LLAMA_LOG_INFO("%s: entering memory-based constructor\n", __func__);
++        LLAMA_LOG_INFO("%s: buffer=%p, size=%zu\n", __func__, buffer, size);
++        
++        // Initialize ctx_meta to nullptr first
++        ctx_meta = nullptr;
++        
 +        struct gguf_init_params params = {
 +            /*.no_alloc = */ true,
 +            /*.ctx      = */ &ctx_meta,
 +        };
 +
++        LLAMA_LOG_INFO("%s: calling gguf_init_from_buffer\n", __func__);
 +        ctx_gguf = gguf_init_from_buffer(buffer, size, params);
 +        if (!ctx_gguf) {
 +            throw std::runtime_error(format("%s: failed to load model from buffer\n", __func__));
 +        }
 +        
-+        LLAMA_LOG_INFO("%s: gguf context created successfully\n", __func__);
++        LLAMA_LOG_INFO("%s: gguf context created successfully, ctx_gguf=%p, ctx_meta=%p\n", __func__, ctx_gguf, ctx_meta);
++        
++        // Check if ctx_meta was properly initialized
++        if (!ctx_meta) {
++            throw std::runtime_error(format("%s: ctx_meta was not initialized by gguf_init_from_buffer\n", __func__));
++        }
 +
++        LLAMA_LOG_INFO("%s: getting n_kv\n", __func__);
 +        n_kv      = gguf_get_n_kv(ctx_gguf);
++        LLAMA_LOG_INFO("%s: n_kv = %d\n", __func__, n_kv);
++        
++        LLAMA_LOG_INFO("%s: getting n_tensors\n", __func__);
 +        n_tensors = gguf_get_n_tensors(ctx_gguf);
++        LLAMA_LOG_INFO("%s: n_tensors = %d\n", __func__, n_tensors);
 +
++        LLAMA_LOG_INFO("%s: getting version\n", __func__);
 +        fver = (enum llama_fver) gguf_get_version(ctx_gguf);
++        LLAMA_LOG_INFO("%s: version = %d\n", __func__, (int)fver);
 +
++        LLAMA_LOG_INFO("%s: iterating through tensors\n", __func__);
 +        for (int i = 0; i < n_tensors; i++) {
++            LLAMA_LOG_INFO("%s: getting tensor %d name\n", __func__, i);
++            
++            // Add extra validation for Windows
++#ifdef _WIN32
++            if (!ctx_gguf) {
++                throw std::runtime_error(format("%s: ctx_gguf became NULL during iteration\n", __func__));
++            }
++#endif
++            
 +            const char * name = gguf_get_tensor_name(ctx_gguf, i);
 +            if (!name) {
 +                throw std::runtime_error(format("%s: tensor %d has no name\n", __func__, i));
 +            }
++            LLAMA_LOG_INFO("%s: tensor %d name = '%s'\n", __func__, i, name);
++            
++            LLAMA_LOG_INFO("%s: getting tensor from ctx_meta\n", __func__);
 +            struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
 +            if (!t) {
 +                throw std::runtime_error(format("%s: tensor '%s' not found in meta\n", __func__, name));
@@ -359,6 +443,7 @@ index 6e23a077..1dfab746 100644
 +            n_elements += ggml_nelements(t);
 +            n_bytes    += ggml_nbytes(t);
 +        }
++        LLAMA_LOG_INFO("%s: finished iterating tensors\n", __func__);
 +
 +        LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from buffer (version %s)\n",
 +                __func__, n_kv, n_tensors, llama_file_version_name(fver));
@@ -414,7 +499,7 @@ index 6e23a077..1dfab746 100644
      llama_model_loader(const std::string & fname, bool use_mmap) : file(fname.c_str(), "rb") {
          struct gguf_init_params params = {
              /*.no_alloc = */ true,
-@@ -1492,7 +1586,6 @@ struct llama_model_loader {
+@@ -1492,7 +1619,6 @@ struct llama_model_loader {
  
      size_t file_offset(const char * name) const {
          const int idx = gguf_find_tensor(ctx_gguf, name);
@@ -422,7 +507,7 @@ index 6e23a077..1dfab746 100644
          if (idx < 0) {
              throw std::runtime_error(format("%s: tensor '%s' not found in the file", __func__, name));
          }
-@@ -1505,10 +1598,31 @@ struct llama_model_loader {
+@@ -1505,10 +1631,31 @@ struct llama_model_loader {
  
          if (use_mmap) {
              cur->data = (uint8_t *) mapping->addr + offs;
@@ -454,7 +539,7 @@ index 6e23a077..1dfab746 100644
      }
  
      void load_all_data(struct ggml_context * ctx, llama_progress_callback progress_callback, void * progress_callback_user_data, llama_mlock * lmlock) {
-@@ -6296,6 +6410,74 @@ struct llama_model * llama_load_model_from_file(
+@@ -6296,6 +6443,81 @@ struct llama_model * llama_load_model_from_file(
      return model;
  }
  
@@ -462,9 +547,14 @@ index 6e23a077..1dfab746 100644
 +                         const void * buffer,
 +                               size_t   buffer_size,
 +        struct llama_context_params   params) {
++    LLAMA_LOG_INFO("%s: starting\n", __func__);
++    LLAMA_LOG_INFO("%s: buffer=%p, size=%zu\n", __func__, buffer, buffer_size);
++    
 +    ggml_time_init();
 +
++    LLAMA_LOG_INFO("%s: creating llama_model\n", __func__);
 +    llama_model * model = new llama_model();  // Explicitly call default constructor
++    LLAMA_LOG_INFO("%s: model created at %p\n", __func__, model);
 +
 +    ggml_type memory_type = params.f16_kv ? GGML_TYPE_F16 : GGML_TYPE_F32;
 +
@@ -486,7 +576,9 @@ index 6e23a077..1dfab746 100644
 +    
 +    try {
 +        // Create a memory-based model loader
++        LLAMA_LOG_INFO("%s: creating llama_model_loader\n", __func__);
 +        std::unique_ptr<llama_model_loader> ml(new llama_model_loader(buffer, buffer_size, false));
++        LLAMA_LOG_INFO("%s: llama_model_loader created successfully\n", __func__);
 +        
 +        LLAMA_LOG_INFO("%s: loading architecture...\n", __func__);
 +        llm_load_arch   (*ml, *model);
