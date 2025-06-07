@@ -104,7 +104,13 @@ jobs:
         cp -r examples/* "$RELEASE_DIR/examples/" || true
         
         # Copy the pre-built library
-        cp libbinding.a "$RELEASE_DIR/"
+        echo "Checking for libbinding.a..."
+        ls -la libbinding.a || echo "libbinding.a not found!"
+        cp libbinding.a "$RELEASE_DIR/" || echo "Failed to copy libbinding.a"
+        
+        # Create empty llama.cpp directory as placeholder
+        mkdir -p "$RELEASE_DIR/llama.cpp"
+        echo "Run ./setup.sh to download llama.cpp" > "$RELEASE_DIR/llama.cpp/README"
         
         # Copy setup script
         cp scripts/setup-llama-cpp.sh "$RELEASE_DIR/setup.sh"
@@ -112,6 +118,7 @@ jobs:
         
         # Save llama.cpp commit hash
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
+        echo "LLAMA_COMMIT content: $(cat $RELEASE_DIR/LLAMA_COMMIT)"
 
     - name: Create tarball (Unix)
       if: runner.os != 'Windows'
@@ -123,6 +130,14 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         tar -czf "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+
+    - name: Verify tarball
+      shell: bash
+      run: |
+        echo "Checking created tarball:"
+        ls -la go-llama.cpp-*.tar.gz
+        echo "Tarball contents:"
+        tar -tzf go-llama.cpp-*.tar.gz | head -20
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -152,6 +167,17 @@ jobs:
 
     - name: Download all artifacts
       uses: actions/download-artifact@v4
+
+    - name: Debug artifacts
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Directory contents:"
+        ls -la
+        echo "Looking for tar.gz files:"
+        find . -name "*.tar.gz" -type f
+        echo "All directories:"
+        find . -type d
 
     - name: Create Release
       id: create_release
