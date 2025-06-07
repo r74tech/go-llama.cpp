@@ -217,15 +217,25 @@ jobs:
         ls -la artifacts/
         echo "Looking for tar.gz files in artifacts:"
         find artifacts -name "*.tar.gz" -type f
+        
+        # Check one of the tar.gz files
+        echo "Checking darwin-arm64 tarball contents:"
+        tar -tzf artifacts/go-llama.cpp-darwin-arm64/go-llama.cpp-darwin-arm64.tar.gz | grep libbinding || echo "libbinding.a not in tarball"
+        
+        # Extract and check
+        echo "Extracting to verify:"
+        cd artifacts/go-llama.cpp-darwin-arm64
+        tar -xzf go-llama.cpp-darwin-arm64.tar.gz
+        echo "Extracted contents:"
+        ls -la go-llama.cpp-darwin-arm64/
+        echo "Checking for libbinding.a:"
+        ls -la go-llama.cpp-darwin-arm64/libbinding.a || echo "libbinding.a not found!"
 
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create Release with Assets
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
-        release_name: Release ${{ github.ref_name || format('manual-{0}', github.run_number) }}
+        name: Release ${{ github.ref_name || format('manual-{0}', github.run_number) }}
         body: |
           Pre-built libraries for go-llama.cpp
           
@@ -234,24 +244,8 @@ jobs:
           To use these pre-built libraries, make sure your llama.cpp submodule is at the same commit.
         draft: ${{ github.event_name == 'workflow_dispatch' }}
         prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+        files: |
+          artifacts/go-llama.cpp-*/*.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload Release Assets
-      run: |
-        echo "Looking for files to upload in artifacts directory:"
-        find artifacts -name "*.tar.gz" -type f
-        
-        # Upload all tar.gz files found in artifacts
-        for file in $(find artifacts -name "*.tar.gz" -type f); do
-          echo "Uploading $file"
-          asset_name=$(basename "$file")
-          echo "Asset name: $asset_name"
-          
-          # Upload using curl
-          response=$(curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @"$file" \
-            "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}")
-          
-          echo "Upload response: $response"
-        done
