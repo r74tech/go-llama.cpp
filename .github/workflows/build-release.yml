@@ -165,12 +165,22 @@ jobs:
         tar -tzf go-llama.cpp-*.tar.gz | grep -E "(libbinding|LLAMA_COMMIT)" || echo "libbinding.a not found in tarball!"
         echo "First 30 files in tarball:"
         tar -tzf go-llama.cpp-*.tar.gz 2>/dev/null | head -30 || true
+        
+        # Extract and verify libbinding.a exists
+        echo "Extracting tarball to verify contents:"
+        mkdir -p verify-extract
+        tar -xzf go-llama.cpp-*.tar.gz -C verify-extract
+        echo "Checking extracted libbinding.a:"
+        ls -la verify-extract/*/libbinding.a || echo "libbinding.a not found after extraction!"
+        echo "File type of libbinding.a:"
+        file verify-extract/*/libbinding.a || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}
         path: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+        include-hidden-files: true
 
   release:
     needs: build
