@@ -121,7 +121,7 @@ jobs:
 
     - name: Create tarball (Windows)
       if: matrix.os == 'windows-latest'
-      shell: bash
+      shell: C:\Program Files\Git\bin\bash.exe -e {0}
       run: |
         RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
         tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
