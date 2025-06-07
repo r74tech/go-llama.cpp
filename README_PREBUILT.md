@@ -4,27 +4,39 @@ This project supports using pre-built libraries to avoid compiling llama.cpp fro
 
 ## What's in the release?
 
-Each release package contains:
+Each complete release package contains:
+- Complete go-llama.cpp source code
 - `libbinding.a` - Pre-built static library (with patches already applied)
-- All necessary Go source files
-- C/C++ binding files
 - `setup.sh` - Script to set up llama.cpp submodule at the correct commit
 - `LLAMA_COMMIT` - File containing the exact llama.cpp commit used
+- All necessary files to build and run
 
 ## How to use pre-built libraries
 
-### Method 1: Complete package download (Simplest)
+### Method 1: All-in-one package download (Simplest)
 
 ```bash
-# 1. Download and extract the release for your platform
-curl -L -o libbinding.tar.gz https://github.com/r74tech/go-llama.cpp/releases/download/v0.1.0/libbinding-linux-amd64.tar.gz
-tar -xzf libbinding.tar.gz
+# 1. Go to https://github.com/r74tech/go-llama.cpp/releases
+# 2. Download the appropriate package for your platform:
+#    - go-llama.cpp-linux-amd64.tar.gz    (Linux x64)
+#    - go-llama.cpp-darwin-amd64.tar.gz   (macOS Intel)
+#    - go-llama.cpp-darwin-arm64.tar.gz   (macOS Apple Silicon)
+#    - go-llama.cpp-windows-amd64.tar.gz  (Windows x64)
 
-# 2. Run the setup script to get llama.cpp headers
+# Example for Linux (replace VERSION with actual release version):
+curl -L -o go-llama.cpp.tar.gz https://github.com/r74tech/go-llama.cpp/releases/download/VERSION/go-llama.cpp-linux-amd64.tar.gz
+
+# 3. Extract the package
+tar -xzf go-llama.cpp.tar.gz
+cd go-llama.cpp-*  # The directory name includes platform and arch
+
+# 4. Run the setup script to get llama.cpp headers
 ./setup.sh
 
-# 3. Build your application
+# 5. Build your application
 go build
+
+# That's it! Everything is included in one package.
 ```
 
 ### Method 2: Using existing repository with pre-built library
@@ -38,7 +50,7 @@ cd go-llama.cpp
 go build -tags prebuilt
 
 # Or specify a specific release
-LLAMA_CPP_RELEASE_TAG=v0.1.0 go build -tags prebuilt
+LLAMA_CPP_RELEASE_TAG=v1.2.3 go build -tags prebuilt
 ```
 
 ### Method 3: Manual setup
@@ -72,8 +84,8 @@ The GitHub Actions workflow automatically builds libraries for multiple platform
 
 ```bash
 # Create and push a new tag
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.2.3
+git push origin v1.2.3
 ```
 
 The workflow will build for:

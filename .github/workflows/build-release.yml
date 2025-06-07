@@ -71,57 +71,58 @@ jobs:
         make clean
         make libbinding.a
 
-    - name: Create artifact directory
+    - name: Create complete release package
+      shell: bash
       run: |
-        mkdir -p artifacts
-
-    - name: Copy artifacts
-      run: |
-        # Copy pre-built library
-        cp libbinding.a artifacts/
+        # Create a directory named like the release
+        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        mkdir -p "$RELEASE_DIR"
         
-        # Copy source files needed for CGO
-        cp binding.h artifacts/
-        cp binding.cpp artifacts/
-        cp llama_data_source.h artifacts/
-        cp llama_data_source.cpp artifacts/
+        # Copy files (cross-platform compatible)
+        # Copy all Go files
+        cp *.go "$RELEASE_DIR/" || true
+        cp go.mod go.sum "$RELEASE_DIR/"
         
-        # Copy Go source files (excluding test files)
-        cp llama.go artifacts/
-        cp options.go artifacts/
-        cp llama_openblas.go artifacts/
-        cp llama_cublas.go artifacts/
+        # Copy source files
+        cp binding.cpp binding.h "$RELEASE_DIR/"
+        cp llama_data_source.cpp llama_data_source.h "$RELEASE_DIR/"
         
-        # Copy go.mod and go.sum
-        cp go.mod artifacts/
-        cp go.sum artifacts/
+        # Copy other important files
+        cp LICENSE README.md README_PREBUILT.md "$RELEASE_DIR/" || true
+        cp Makefile "$RELEASE_DIR/"
+        cp renovate.json "$RELEASE_DIR/" || true
+        cp .gitignore .gitmodules "$RELEASE_DIR/" || true
         
-        # Copy patches (already applied to libbinding.a, but included for reference)
-        mkdir -p artifacts/patches
-        cp patches/*.patch artifacts/patches/
+        # Copy directories
+        mkdir -p "$RELEASE_DIR/scripts"
+        cp -r scripts/* "$RELEASE_DIR/scripts/" || true
         
-        # Create a minimal .gitmodules file pointing to the correct commit
-        echo "[submodule \"llama.cpp\"]" > artifacts/.gitmodules
-        echo "	path = llama.cpp" >> artifacts/.gitmodules
-        echo "	url = https://github.com/ggerganov/llama.cpp" >> artifacts/.gitmodules
+        mkdir -p "$RELEASE_DIR/patches"
+        cp -r patches/* "$RELEASE_DIR/patches/"
+        
+        mkdir -p "$RELEASE_DIR/examples"
+        cp -r examples/* "$RELEASE_DIR/examples/" || true
+        
+        # Copy the pre-built library
+        cp libbinding.a "$RELEASE_DIR/"
         
         # Copy setup script
-        cp scripts/setup-llama-cpp.sh artifacts/setup.sh
-        chmod +x artifacts/setup.sh
+        cp scripts/setup-llama-cpp.sh "$RELEASE_DIR/setup.sh"
+        chmod +x "$RELEASE_DIR/setup.sh" || true
         
         # Save llama.cpp commit hash
-        echo "${{ steps.get_commit.outputs.llama_commit }}" > artifacts/LLAMA_COMMIT
+        echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
 
     - name: Create tarball
       run: |
-        cd artifacts
-        tar -czf ../libbinding-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz *
+        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: libbinding-${{ matrix.platform }}-${{ matrix.arch }}
-        path: libbinding-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+        name: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}
+        path: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
 
   release:
     needs: build
@@ -165,7 +166,7 @@ jobs:
 
     - name: Upload Release Assets
       run: |
-        for file in libbinding-*/libbinding-*.tar.gz; do
+        for file in go-llama.cpp-*/go-llama.cpp-*.tar.gz; do
           echo "Uploading $file"
           asset_name=$(basename "$file")
           curl -X POST \
