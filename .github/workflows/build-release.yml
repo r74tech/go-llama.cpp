@@ -123,7 +123,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     
     steps:
     - name: Checkout code
@@ -149,16 +149,16 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
+        release_name: Release ${{ github.ref_name || format('manual-{0}', github.run_number) }}
         body: |
           Pre-built libraries for go-llama.cpp
           
           **llama.cpp commit**: `${{ steps.get_commit.outputs.llama_commit }}`
           
           To use these pre-built libraries, make sure your llama.cpp submodule is at the same commit.
-        draft: false
-        prerelease: false
+        draft: ${{ github.event_name == 'workflow_dispatch' }}
+        prerelease: ${{ github.event_name == 'workflow_dispatch' }}
 
     - name: Upload Release Assets
       run: |
