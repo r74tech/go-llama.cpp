@@ -114,6 +114,7 @@ jobs:
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
 
     - name: Create tarball
+      shell: bash
       run: |
         RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
         tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
