@@ -156,7 +156,7 @@ jobs:
         echo "Checking for libbinding.a in tarball:"
         tar -tzf go-llama.cpp-*.tar.gz | grep -E "(libbinding|LLAMA_COMMIT)" || echo "libbinding.a not found in tarball!"
         echo "First 30 files in tarball:"
-        tar -tzf go-llama.cpp-*.tar.gz | head -30
+        tar -tzf go-llama.cpp-*.tar.gz 2>/dev/null | head -30 || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -217,12 +217,18 @@ jobs:
 
     - name: Upload Release Assets
       run: |
-        for file in go-llama.cpp-*/go-llama.cpp-*.tar.gz; do
-          echo "Uploading $file"
-          asset_name=$(basename "$file")
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @"$file" \
-            "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}"
+        echo "Looking for files to upload:"
+        find . -name "*.tar.gz" -type f
+        
+        # Try different patterns
+        for file in go-llama.cpp-*/*.tar.gz *.tar.gz; do
+          if [ -f "$file" ]; then
+            echo "Uploading $file"
+            asset_name=$(basename "$file")
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/gzip" \
+              --data-binary @"$file" \
+              "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}"
+          fi
         done
