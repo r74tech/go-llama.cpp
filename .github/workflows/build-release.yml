@@ -71,7 +71,7 @@ jobs:
         make clean
         make libbinding.a
 
-    - name: Create complete release package
+    - name: Create complete release package  
       shell: bash
       run: |
         # Create a directory named like the release
@@ -113,7 +113,14 @@ jobs:
         # Save llama.cpp commit hash
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
 
-    - name: Create tarball
+    - name: Create tarball (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
+
+    - name: Create tarball (Windows)
+      if: matrix.os == 'windows-latest'
       shell: bash
       run: |
         RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
