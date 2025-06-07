@@ -113,8 +113,14 @@ jobs:
         # Save llama.cpp commit hash
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
 
-    - name: Create tarball
-      shell: bash
+    - name: Create tarball (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
+
+    - name: Create tarball (Windows)
+      if: runner.os == 'Windows'
       run: |
         tar -czf "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
 
