@@ -102,29 +102,8 @@ jobs:
         echo "	path = llama.cpp" >> artifacts/.gitmodules
         echo "	url = https://github.com/ggerganov/llama.cpp" >> artifacts/.gitmodules
         
-        # Create setup script
-        cat > artifacts/setup.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Get llama.cpp commit from release
-LLAMA_COMMIT=$(cat LLAMA_COMMIT 2>/dev/null || echo "ac43576124a75c2de6e333ac31a3444ff9eb9458")
-
-echo "Setting up llama.cpp submodule at commit $LLAMA_COMMIT..."
-
-# Clone llama.cpp with depth=1 at specific commit
-if [ ! -d "llama.cpp" ]; then
-    git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama.cpp
-    cd llama.cpp
-    git fetch --depth 1 origin $LLAMA_COMMIT
-    git checkout $LLAMA_COMMIT
-    cd ..
-else
-    echo "llama.cpp directory already exists"
-fi
-
-echo "Setup complete! You can now build with Go"
-EOF
+        # Copy setup script
+        cp scripts/setup-llama-cpp.sh artifacts/setup.sh
         chmod +x artifacts/setup.sh
         
         # Save llama.cpp commit hash
