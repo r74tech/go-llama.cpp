@@ -70,6 +70,11 @@ jobs:
         fi
         make clean
         make libbinding.a
+        
+        # Check what was actually built
+        echo "Checking for built libraries:"
+        ls -la *.a *.lib 2>/dev/null || echo "No .a or .lib files found"
+        ls -la libbinding* 2>/dev/null || echo "No libbinding files found"
 
     - name: Create complete release package  
       shell: bash
@@ -104,9 +109,17 @@ jobs:
         cp -r examples/* "$RELEASE_DIR/examples/" || true
         
         # Copy the pre-built library
-        echo "Checking for libbinding.a..."
-        ls -la libbinding.a || echo "libbinding.a not found!"
-        cp libbinding.a "$RELEASE_DIR/" || echo "Failed to copy libbinding.a"
+        echo "Checking for libbinding.a or libbinding.lib..."
+        if [ -f "libbinding.a" ]; then
+            echo "Found libbinding.a"
+            cp libbinding.a "$RELEASE_DIR/"
+        elif [ -f "libbinding.lib" ]; then
+            echo "Found libbinding.lib, copying as libbinding.a"
+            cp libbinding.lib "$RELEASE_DIR/libbinding.a"
+        else
+            echo "ERROR: Neither libbinding.a nor libbinding.lib found!"
+            ls -la *.a *.lib 2>/dev/null || true
+        fi
         
         # Create empty llama.cpp directory as placeholder
         mkdir -p "$RELEASE_DIR/llama.cpp"
@@ -119,6 +132,10 @@ jobs:
         # Save llama.cpp commit hash
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
         echo "LLAMA_COMMIT content: $(cat $RELEASE_DIR/LLAMA_COMMIT)"
+        
+        # Verify directory contents
+        echo "Contents of $RELEASE_DIR:"
+        ls -la "$RELEASE_DIR/" | grep -E "(libbinding|LLAMA_COMMIT)"
 
     - name: Create tarball (Unix)
       if: runner.os != 'Windows'
@@ -136,8 +153,10 @@ jobs:
       run: |
         echo "Checking created tarball:"
         ls -la go-llama.cpp-*.tar.gz
-        echo "Tarball contents:"
-        tar -tzf go-llama.cpp-*.tar.gz | head -20
+        echo "Checking for libbinding.a in tarball:"
+        tar -tzf go-llama.cpp-*.tar.gz | grep -E "(libbinding|LLAMA_COMMIT)" || echo "libbinding.a not found in tarball!"
+        echo "First 30 files in tarball:"
+        tar -tzf go-llama.cpp-*.tar.gz | head -30
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
