@@ -2,27 +2,69 @@
 
 This project supports using pre-built libraries to avoid compiling llama.cpp from source each time.
 
+## What's in the release?
+
+Each release package contains:
+- `libbinding.a` - Pre-built static library (with patches already applied)
+- All necessary Go source files
+- C/C++ binding files
+- `setup.sh` - Script to set up llama.cpp submodule at the correct commit
+- `LLAMA_COMMIT` - File containing the exact llama.cpp commit used
+
 ## How to use pre-built libraries
 
-### Method 1: Using build tags (Recommended)
+### Method 1: Complete package download (Simplest)
 
 ```bash
-# Download pre-built libraries and build
+# 1. Download and extract the release for your platform
+curl -L -o libbinding.tar.gz https://github.com/r74tech/go-llama.cpp/releases/download/v0.1.0/libbinding-linux-amd64.tar.gz
+tar -xzf libbinding.tar.gz
+
+# 2. Run the setup script to get llama.cpp headers
+./setup.sh
+
+# 3. Build your application
+go build
+```
+
+### Method 2: Using existing repository with pre-built library
+
+```bash
+# Clone repository
+git clone https://github.com/r74tech/go-llama.cpp
+cd go-llama.cpp
+
+# Download pre-built library using build tag
 go build -tags prebuilt
 
 # Or specify a specific release
 LLAMA_CPP_RELEASE_TAG=v0.1.0 go build -tags prebuilt
 ```
 
-### Method 2: Manual download
+### Method 3: Manual setup
 
 ```bash
-# Run the download script directly
+# If you already have the repository
+cd go-llama.cpp
+
+# Run the download script
 go run scripts/download-libs.go
 
-# Then build normally
+# Make sure llama.cpp is at the correct commit
+cd llama.cpp
+git fetch --depth 1 origin <commit-from-release>
+git checkout <commit-from-release>
+cd ..
+
+# Build
 go build
 ```
+
+## Important Notes
+
+- The patches are already applied to `libbinding.a`, you don't need to apply them manually
+- The llama.cpp submodule must be at the exact commit specified in the release
+- The `setup.sh` script automatically handles the shallow clone of llama.cpp
 
 ## Building and releasing pre-built libraries
 

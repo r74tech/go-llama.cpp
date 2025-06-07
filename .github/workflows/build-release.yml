@@ -49,6 +49,14 @@ jobs:
         choco install mingw -y
         echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
 
+    - name: Get llama.cpp commit
+      id: get_commit
+      shell: bash
+      run: |
+        LLAMA_COMMIT=$(git submodule status llama.cpp | awk '{print $1}')
+        echo "llama_commit=${LLAMA_COMMIT}" >> $GITHUB_OUTPUT
+        echo "Llama.cpp commit: ${LLAMA_COMMIT}"
+
     - name: Build library
       shell: bash
       run: |
@@ -63,32 +71,64 @@ jobs:
     - name: Create artifact directory
       run: |
         mkdir -p artifacts
-        mkdir -p artifacts/llama.cpp
 
-    - name: Copy artifacts (Unix)
-      if: matrix.os != 'windows-latest'
+    - name: Copy artifacts
       run: |
+        # Copy pre-built library
         cp libbinding.a artifacts/
+        
+        # Copy source files needed for CGO
         cp binding.h artifacts/
-        cp llama.cpp/ggml.h artifacts/llama.cpp/
-        cp llama.cpp/ggml-alloc.h artifacts/llama.cpp/
-        cp llama.cpp/ggml-backend.h artifacts/llama.cpp/
-        cp llama.cpp/ggml-metal.h artifacts/llama.cpp/ || true
-        cp llama.cpp/ggml-cuda.h artifacts/llama.cpp/ || true
-        cp llama.cpp/llama.h artifacts/llama.cpp/
+        cp binding.cpp artifacts/
+        cp llama_data_source.h artifacts/
+        cp llama_data_source.cpp artifacts/
+        
+        # Copy Go source files (excluding test files)
+        cp llama.go artifacts/
+        cp options.go artifacts/
+        cp llama_openblas.go artifacts/
+        cp llama_cublas.go artifacts/
+        
+        # Copy go.mod and go.sum
+        cp go.mod artifacts/
+        cp go.sum artifacts/
+        
+        # Copy patches (already applied to libbinding.a, but included for reference)
+        mkdir -p artifacts/patches
+        cp patches/*.patch artifacts/patches/
+        
+        # Create a minimal .gitmodules file pointing to the correct commit
+        echo "[submodule \"llama.cpp\"]" > artifacts/.gitmodules
+        echo "	path = llama.cpp" >> artifacts/.gitmodules
+        echo "	url = https://github.com/ggerganov/llama.cpp" >> artifacts/.gitmodules
+        
+        # Create setup script
+        cat > artifacts/setup.sh << 'EOF'
+#!/bin/bash
+set -e
 
-    - name: Copy artifacts (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        Copy-Item -Path "build\Release\binding.lib" -Destination "artifacts\libbinding.a"
-        Copy-Item -Path "binding.h" -Destination "artifacts\"
-        Copy-Item -Path "llama.cpp\ggml.h" -Destination "artifacts\llama.cpp\"
-        Copy-Item -Path "llama.cpp\ggml-alloc.h" -Destination "artifacts\llama.cpp\"
-        Copy-Item -Path "llama.cpp\ggml-backend.h" -Destination "artifacts\llama.cpp\"
-        if (Test-Path "llama.cpp\ggml-metal.h") { Copy-Item -Path "llama.cpp\ggml-metal.h" -Destination "artifacts\llama.cpp\" }
-        if (Test-Path "llama.cpp\ggml-cuda.h") { Copy-Item -Path "llama.cpp\ggml-cuda.h" -Destination "artifacts\llama.cpp\" }
-        Copy-Item -Path "llama.cpp\llama.h" -Destination "artifacts\llama.cpp\"
-      shell: pwsh
+# Get llama.cpp commit from release
+LLAMA_COMMIT=$(cat LLAMA_COMMIT 2>/dev/null || echo "ac43576124a75c2de6e333ac31a3444ff9eb9458")
+
+echo "Setting up llama.cpp submodule at commit $LLAMA_COMMIT..."
+
+# Clone llama.cpp with depth=1 at specific commit
+if [ ! -d "llama.cpp" ]; then
+    git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama.cpp
+    cd llama.cpp
+    git fetch --depth 1 origin $LLAMA_COMMIT
+    git checkout $LLAMA_COMMIT
+    cd ..
+else
+    echo "llama.cpp directory already exists"
+fi
+
+echo "Setup complete! You can now build with Go"
+EOF
+        chmod +x artifacts/setup.sh
+        
+        # Save llama.cpp commit hash
+        echo "${{ steps.get_commit.outputs.llama_commit }}" > artifacts/LLAMA_COMMIT
 
     - name: Create tarball
       run: |
@@ -107,6 +147,20 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Get llama.cpp commit
+      id: get_commit
+      run: |
+        LLAMA_COMMIT=$(git submodule status llama.cpp | awk '{print $1}')
+        echo "llama_commit=${LLAMA_COMMIT}" >> $GITHUB_OUTPUT
+        echo "Llama.cpp commit: ${LLAMA_COMMIT}"
+        # Also store for the build job
+        echo "LLAMA_COMMIT=${LLAMA_COMMIT}" >> $GITHUB_ENV
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
 
@@ -118,6 +172,12 @@ jobs:
       with:
         tag_name: ${{ github.ref }}
         release_name: Release ${{ github.ref }}
+        body: |
+          Pre-built libraries for go-llama.cpp
+          
+          **llama.cpp commit**: `${{ steps.get_commit.outputs.llama_commit }}`
+          
+          To use these pre-built libraries, make sure your llama.cpp submodule is at the same commit.
         draft: false
         prerelease: false
 

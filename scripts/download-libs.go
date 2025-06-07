@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	repoOwner = "r74tech"
+	repoOwner = "r74tech" // Change this to your GitHub username/org
 	repoName  = "go-llama.cpp"
 )
 
