@@ -121,10 +121,8 @@ jobs:
 
     - name: Create tarball (Windows)
       if: matrix.os == 'windows-latest'
-      shell: C:\Program Files\Git\bin\bash.exe -e {0}
       run: |
-        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
-        tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
+        bash -c "RELEASE_DIR='go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}' && tar -czf \"\${RELEASE_DIR}.tar.gz\" \"\$RELEASE_DIR\""
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
