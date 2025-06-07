@@ -1,5 +1,5 @@
 diff --git a/ggml.c b/ggml.c
-index a0be068d..9a6dea30 100644
+index a0be068d..6e129011 100644
 --- a/ggml.c
 +++ b/ggml.c
 @@ -19700,6 +19700,21 @@ static bool gguf_fread_el(FILE * file, void * dst, size_t size, size_t * offset)
@@ -24,7 +24,7 @@ index a0be068d..9a6dea30 100644
  // NOTE: temporary handling of GGUFv1 >> remove after Oct 2023
  static bool gguf_fread_str_cur(FILE * file, struct gguf_str * p, size_t * offset) {
      p->n    = 0;
-@@ -20062,6 +20077,264 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
+@@ -20062,6 +20077,331 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
      return ctx;
  }
  
@@ -283,13 +283,80 @@ index a0be068d..9a6dea30 100644
 +    // Store the buffer pointer - we always need this for memory-based loading
 +    ctx->data = (void *)buffer;
 +
++    // load the tensor data only if requested
++    if (params.ctx != NULL) {
++        // compute the exact size needed for the new ggml_context
++        const size_t mem_size =
++            params.no_alloc ?
++            (ctx->header.n_tensors    )*ggml_tensor_overhead() :
++            (ctx->header.n_tensors + 1)*ggml_tensor_overhead() + ctx->size;
++
++        struct ggml_init_params pdata = {
++            .mem_size   = mem_size,
++            .mem_buffer = NULL,
++            .no_alloc   = params.no_alloc,
++        };
++
++        *params.ctx = ggml_init(pdata);
++
++        struct ggml_context * ctx_data = *params.ctx;
++
++        struct ggml_tensor * data = NULL;
++
++        if (!params.no_alloc) {
++            // we don't create a data tensor for memory-based loading as we use the buffer directly
++            data = NULL;
++        }
++
++        ggml_set_no_alloc(ctx_data, true);
++
++        // create the tensors
++        for (uint32_t i = 0; i < ctx->header.n_tensors; ++i) {
++            const struct gguf_tensor_info * info = &ctx->infos[i];
++
++            struct ggml_tensor * cur = NULL;
++
++            switch (info->n_dims) {
++                case 1:
++                    cur = ggml_new_tensor_1d(ctx_data, info->type, info->ne[0]);
++                    break;
++                case 2:
++                    cur = ggml_new_tensor_2d(ctx_data, info->type, info->ne[0], info->ne[1]);
++                    break;
++                case 3:
++                    cur = ggml_new_tensor_3d(ctx_data, info->type, info->ne[0], info->ne[1], info->ne[2]);
++                    break;
++                case 4:
++                    cur = ggml_new_tensor_4d(ctx_data, info->type, info->ne[0], info->ne[1], info->ne[2], info->ne[3]);
++                    break;
++                default:
++                    {
++                        fprintf(stderr, "%s: tensor '%s' has %d dimensions, expected <= 4\n", __func__, info->name.data, info->n_dims);
++                        ggml_free(ctx_data);
++                        gguf_free(ctx);
++                        return NULL;
++                    }
++            }
++
++            ggml_set_name(cur, info->name.data);
++
++            // point the data member to the appropriate location in the binary buffer if not no_alloc
++            if (!params.no_alloc) {
++                // we will set this later when loading the data
++                cur->data = NULL;
++            }
++        }
++
++        ggml_set_no_alloc(ctx_data, params.no_alloc);
++    }
++
 +    return ctx;
 +}
 +
  void gguf_free(struct gguf_context * ctx) {
      if (ctx == NULL) {
          return;
-@@ -20120,6 +20393,10 @@ const char * gguf_type_name(enum gguf_type type) {
+@@ -20120,6 +20460,10 @@ const char * gguf_type_name(enum gguf_type type) {
  }
  
  int gguf_get_version(const struct gguf_context * ctx) {
@@ -300,7 +367,7 @@ index a0be068d..9a6dea30 100644
      return ctx->header.version;
  }
  
-@@ -20136,6 +20413,10 @@ void * gguf_get_data(const struct gguf_context * ctx) {
+@@ -20136,6 +20480,10 @@ void * gguf_get_data(const struct gguf_context * ctx) {
  }
  
  int gguf_get_n_kv(const struct gguf_context * ctx) {
@@ -311,7 +378,7 @@ index a0be068d..9a6dea30 100644
      return ctx->header.n_kv;
  }
  
-@@ -20230,6 +20511,10 @@ const char * gguf_get_val_str (const struct gguf_context * ctx, int i) {
+@@ -20230,6 +20578,10 @@ const char * gguf_get_val_str (const struct gguf_context * ctx, int i) {
  }
  
  int gguf_get_n_tensors(const struct gguf_context * ctx) {
@@ -322,7 +389,7 @@ index a0be068d..9a6dea30 100644
      return ctx->header.n_tensors;
  }
  
-@@ -20254,6 +20539,18 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int i) {
+@@ -20254,6 +20606,18 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int i) {
  }
  
  char * gguf_get_tensor_name(const struct gguf_context * ctx, int i) {
