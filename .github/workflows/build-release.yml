@@ -19,10 +19,10 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: amd64
-          - os: macos-latest
+          - os: macos-13  # Intel Mac
             platform: darwin
             arch: amd64
-          - os: macos-14
+          - os: macos-14  # Apple Silicon Mac
             platform: darwin
             arch: arm64
           - os: windows-latest
@@ -72,9 +72,17 @@ jobs:
         make libbinding.a
         
         # Check what was actually built
-        echo "Checking for built libraries:"
-        ls -la *.a *.lib 2>/dev/null || echo "No .a or .lib files found"
+        echo "=== Checking for built libraries on ${{ matrix.os }} ==="
+        echo "Current directory:"
+        pwd
+        echo "All .a files:"
+        find . -name "*.a" -type f | head -20
+        echo "All .lib files:"
+        find . -name "*.lib" -type f | head -20
+        echo "libbinding files:"
         ls -la libbinding* 2>/dev/null || echo "No libbinding files found"
+        echo "llama.cpp directory:"
+        ls -la llama.cpp/*.o 2>/dev/null | head -10 || echo "No .o files in llama.cpp"
 
     - name: Create complete release package  
       shell: bash
@@ -220,15 +228,18 @@ jobs:
         echo "Looking for files to upload:"
         find . -name "*.tar.gz" -type f
         
-        # Try different patterns
-        for file in go-llama.cpp-*/*.tar.gz *.tar.gz; do
-          if [ -f "$file" ]; then
-            echo "Uploading $file"
-            asset_name=$(basename "$file")
-            curl -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Content-Type: application/gzip" \
-              --data-binary @"$file" \
-              "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}"
-          fi
+        # Upload all tar.gz files found
+        for file in $(find . -name "*.tar.gz" -type f); do
+          echo "Uploading $file"
+          asset_name=$(basename "$file")
+          echo "Asset name: $asset_name"
+          
+          # Upload using curl
+          response=$(curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @"$file" \
+            "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}")
+          
+          echo "Upload response: $response"
         done
