@@ -1,0 +1,136 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+          - os: macos-latest
+            platform: darwin
+            arch: amd64
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up build environment (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    - name: Set up build environment (macOS)
+      if: startsWith(matrix.os, 'macos')
+      run: |
+        brew install cmake
+
+    - name: Set up build environment (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build libbinding.a (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        make clean
+        make libbinding.a
+
+    - name: Build libbinding.a (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build . --config Release
+      shell: pwsh
+
+    - name: Create artifact directory
+      run: |
+        mkdir -p artifacts
+        mkdir -p artifacts/llama.cpp
+
+    - name: Copy artifacts (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cp libbinding.a artifacts/
+        cp binding.h artifacts/
+        cp llama.cpp/ggml.h artifacts/llama.cpp/
+        cp llama.cpp/ggml-alloc.h artifacts/llama.cpp/
+        cp llama.cpp/ggml-backend.h artifacts/llama.cpp/
+        cp llama.cpp/ggml-metal.h artifacts/llama.cpp/ || true
+        cp llama.cpp/ggml-cuda.h artifacts/llama.cpp/ || true
+        cp llama.cpp/llama.h artifacts/llama.cpp/
+
+    - name: Copy artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        Copy-Item -Path "build\Release\binding.lib" -Destination "artifacts\libbinding.a"
+        Copy-Item -Path "binding.h" -Destination "artifacts\"
+        Copy-Item -Path "llama.cpp\ggml.h" -Destination "artifacts\llama.cpp\"
+        Copy-Item -Path "llama.cpp\ggml-alloc.h" -Destination "artifacts\llama.cpp\"
+        Copy-Item -Path "llama.cpp\ggml-backend.h" -Destination "artifacts\llama.cpp\"
+        if (Test-Path "llama.cpp\ggml-metal.h") { Copy-Item -Path "llama.cpp\ggml-metal.h" -Destination "artifacts\llama.cpp\" }
+        if (Test-Path "llama.cpp\ggml-cuda.h") { Copy-Item -Path "llama.cpp\ggml-cuda.h" -Destination "artifacts\llama.cpp\" }
+        Copy-Item -Path "llama.cpp\llama.h" -Destination "artifacts\llama.cpp\"
+      shell: pwsh
+
+    - name: Create tarball
+      run: |
+        cd artifacts
+        tar -czf ../libbinding-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz *
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: libbinding-${{ matrix.platform }}-${{ matrix.arch }}
+        path: libbinding-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      run: |
+        for file in libbinding-*/libbinding-*.tar.gz; do
+          echo "Uploading $file"
+          asset_name=$(basename "$file")
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @"$file" \
+            "${{ steps.create_release.outputs.upload_url }}?name=${asset_name}"
+        done
