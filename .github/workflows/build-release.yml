@@ -84,6 +84,22 @@ jobs:
         echo "llama.cpp directory:"
         ls -la llama.cpp/*.o 2>/dev/null | head -10 || echo "No .o files in llama.cpp"
 
+    - name: Fetch llama.cpp at specific commit
+      shell: bash
+      run: |
+        # Clone llama.cpp at the specific commit
+        LLAMA_COMMIT="${{ steps.get_commit.outputs.llama_commit }}"
+        echo "Fetching llama.cpp at commit: $LLAMA_COMMIT"
+        
+        # Create a temporary directory for llama.cpp
+        mkdir -p temp_llama
+        cd temp_llama
+        git init
+        git remote add origin https://github.com/ggerganov/llama.cpp.git
+        git fetch --depth 1 origin $LLAMA_COMMIT
+        git checkout $LLAMA_COMMIT
+        cd ..
+
     - name: Create complete release package  
       shell: bash
       run: |
@@ -129,13 +145,12 @@ jobs:
             ls -la *.a *.lib 2>/dev/null || true
         fi
         
-        # Create empty llama.cpp directory as placeholder
-        mkdir -p "$RELEASE_DIR/llama.cpp"
-        echo "Run ./setup.sh to download llama.cpp" > "$RELEASE_DIR/llama.cpp/README"
+        # Copy the fetched llama.cpp source
+        echo "Copying llama.cpp source code..."
+        cp -r temp_llama "$RELEASE_DIR/llama.cpp"
         
-        # Copy setup script
-        cp scripts/setup-llama-cpp.sh "$RELEASE_DIR/setup.sh"
-        chmod +x "$RELEASE_DIR/setup.sh" || true
+        # Remove .git directory to save space
+        rm -rf "$RELEASE_DIR/llama.cpp/.git"
         
         # Save llama.cpp commit hash
         echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
@@ -144,6 +159,8 @@ jobs:
         # Verify directory contents
         echo "Contents of $RELEASE_DIR:"
         ls -la "$RELEASE_DIR/" | grep -E "(libbinding|LLAMA_COMMIT)"
+        echo "llama.cpp directory size:"
+        du -sh "$RELEASE_DIR/llama.cpp"
 
     - name: Create tarball (Unix)
       if: runner.os != 'Windows'
