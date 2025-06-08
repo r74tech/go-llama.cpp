@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build on ${{ matrix.os }} ${{ matrix.build_type == 'metal' && '(Metal)' || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -19,15 +19,27 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: amd64
+            build_type: default
           - os: macos-13  # Intel Mac
             platform: darwin
             arch: amd64
+            build_type: default
+          - os: macos-13  # Intel Mac with Metal
+            platform: darwin
+            arch: amd64
+            build_type: metal
           - os: macos-14  # Apple Silicon Mac
             platform: darwin
             arch: arm64
+            build_type: default
+          - os: macos-14  # Apple Silicon Mac with Metal
+            platform: darwin
+            arch: arm64
+            build_type: metal
           - os: windows-latest
             platform: windows
             arch: amd64
+            build_type: default
 
     steps:
     - name: Checkout code
@@ -69,7 +81,11 @@ jobs:
           export CXX=g++
         fi
         make clean
-        make libbinding.a
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          BUILD_TYPE=metal make libbinding.a
+        else
+          make libbinding.a
+        fi
         
         # Check what was actually built
         echo "=== Checking for built libraries on ${{ matrix.os }} ==="
@@ -104,7 +120,11 @@ jobs:
       shell: bash
       run: |
         # Create a directory named like the release
-        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}-metal"
+        else
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        fi
         mkdir -p "$RELEASE_DIR"
         
         # Copy files (cross-platform compatible)
@@ -165,7 +185,11 @@ jobs:
     - name: Create tarball (Unix)
       if: runner.os != 'Windows'
       run: |
-        RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}-metal"
+        else
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        fi
         tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
 
     - name: Create tarball (Windows)
@@ -195,8 +219,8 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}
-        path: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+        name: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.build_type == 'metal' && '-metal' || '' }}
+        path: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.build_type == 'metal' && '-metal' || '' }}.tar.gz
         include-hidden-files: true
 
   release:
