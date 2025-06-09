@@ -1,6 +1,7 @@
 # build files
 /binding.o
-/build
+/build/*
+!/build/.gitkeep
 /ggml-metal.metal
 /libbinding.a
 prepare
