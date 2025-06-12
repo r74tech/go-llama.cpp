@@ -10,11 +10,9 @@ extern "C" {
 struct llama_context;
 struct llama_model;
 
-// Define the binding state structure
-struct llama_binding_state {
-    struct llama_context* ctx;
-    struct llama_model* model;
-};
+// llama_binding_state is already defined in common.h via the patch
+// We only need a forward declaration here
+struct llama_binding_state;
 
 // Forward declaration for llama_load_model_from_buffer
 // NOTE: Currently not implemented in llama.cpp, using temporary file workaround
