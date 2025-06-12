@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+#include <atomic>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -75,7 +76,7 @@ void sigint_handler(int signo) {
 // Note: llama_binding_state structure is now defined in common.h via the patch
 
 // Forward declarations
-// Note: load_binding_model is now provided by common.cpp via the patch
+// load_binding_model is implemented below
 
 llama_token llama_sample_token_binding(
         struct llama_context * ctx,
@@ -163,19 +164,40 @@ int eval(void* params_ptr,void* state_pr,char *text) {
     return llama_eval(ctx, tokens.data(), n_prompt_tokens, n_past, params_p->n_threads);
 }
 
-static llama_context ** g_ctx;
-static gpt_params               * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
+// Removed global variables to fix thread safety issues
+// These were causing segmentation faults in concurrent access
 
 int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
+    if (!params_ptr || !state_pr || !result) {
+        fprintf(stderr, "%s: error: null pointer passed\n", __func__);
+        return 1;
+    }
+    
     gpt_params* params_p = (gpt_params*) params_ptr;
     llama_binding_state* state = (llama_binding_state*) state_pr;
+    
+    if (!state->ctx || !state->model) {
+        fprintf(stderr, "%s: error: invalid state - ctx or model is null\n", __func__);
+        return 1;
+    }
+    
+    // Additional validation to prevent segfaults
     llama_context* ctx = state->ctx;
+    
+    // Verify the context is properly initialized
+    const int n_ctx_test = llama_n_ctx(ctx);
+    if (n_ctx_test <= 0) {
+        fprintf(stderr, "%s: error: invalid context size %d\n", __func__, n_ctx_test);
+        return 1;
+    }
+    
+    const int n_vocab_test = llama_n_vocab(ctx);
+    if (n_vocab_test <= 0) {
+        fprintf(stderr, "%s: error: invalid vocab size %d\n", __func__, n_vocab_test);
+        return 1;
+    }
 
     gpt_params params = *params_p;
-    g_params = &params;
     const int n_ctx = llama_n_ctx(ctx);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
@@ -201,7 +223,6 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
         params.n_ctx = 8;
     }
     llama_context * ctx_guidance = NULL;
-    g_ctx = &ctx;
     
     if (params.cfg_scale > 1.f) {
         struct llama_context_params lparams = llama_context_params_from_gpt_params(params);
@@ -242,7 +263,12 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
 
     std::vector<llama_token> embd_inp;
     if ( !params.prompt.empty() || session_tokens.empty() ) {
-        embd_inp = ::llama_tokenize(ctx, params.prompt, add_bos);
+        try {
+            embd_inp = ::llama_tokenize(ctx, params.prompt, add_bos);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "%s: error: tokenization failed: %s\n", __func__, e.what());
+            return 1;
+        }
     } else {
         embd_inp = session_tokens;
     }
@@ -351,9 +377,9 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     int n_session_consumed = 0;
     int n_past_guidance    = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
 
     // the first thing we will do is to output the prompt, so set color accordingly
 
@@ -366,13 +392,23 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     std::string res = "";
 
     {
-        const std::vector<llama_token> tmp = { llama_token_bos(ctx), };
-        llama_eval(ctx, tmp.data(), tmp.size(), 0, params.n_threads);
+        const llama_token bos_token = llama_token_bos(ctx);
+        if (bos_token < 0 || bos_token >= n_vocab) {
+            fprintf(stderr, "%s: warning: invalid BOS token %d, skipping initial eval\n", __func__, bos_token);
+        } else {
+            const std::vector<llama_token> tmp = { bos_token };
+            if (llama_eval(ctx, tmp.data(), tmp.size(), 0, params.n_threads) != 0) {
+                fprintf(stderr, "%s: warning: initial BOS eval failed\n", __func__);
+            }
+        }
         llama_reset_timings(ctx);
     }
     
     // set the seed before actually predicting
     llama_set_rng_seed(ctx, params.seed);
+    
+    // Memory barrier to ensure all initialization is complete
+    std::atomic_thread_fence(std::memory_order_acquire);
 
     while (n_remain != 0) {
                // predict
@@ -478,7 +514,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
                     n_eval = params.n_batch;
                 }
                 if (llama_eval(ctx, &embd[i], n_eval, n_past, params.n_threads)) {
-                    fprintf(stderr, "%s : failed to eval\n", __func__);
+                    fprintf(stderr, "%s : failed to eval at n_past=%d, n_eval=%d\n", __func__, n_past, n_eval);
                     return 1;
                 }
                 n_past += n_eval;
@@ -500,6 +536,12 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
                 llama_save_session_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
             }
 
+            // Ensure we have evaluated at least once before sampling
+            if (n_past == 0) {
+                fprintf(stderr, "%s: error: attempting to sample before any evaluation\n", __func__);
+                return 1;
+            }
+            
             const llama_token id = llama_sample_token_binding(ctx, ctx_guidance, grammar, params_p, last_tokens, candidates);
             //const llama_token id = llama_sample_token(ctx, ctx_guidance, grammar, params, last_tokens, candidates);
 
@@ -515,7 +557,13 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
 
             // call the token callback, no need to check if one is actually registered, that will
             // be handled on the Go side.
-            auto token_str = llama_token_to_piece(ctx, id);
+            std::string token_str;
+            try {
+                token_str = llama_token_to_piece(ctx, id);
+            } catch (const std::exception& e) {
+                fprintf(stderr, "%s: warning: token_to_piece failed for token %d: %s\n", __func__, id, e.what());
+                token_str = "";
+            }
             if (!tokenCallback(state_pr, (char*)token_str.c_str())) {
                 break;
             }
@@ -604,9 +652,26 @@ end:
         llama_grammar_free(grammar);
     }
 
-    llama_backend_free();
+    // Don't free the backend here - it should only be freed when the model is freed
+    // llama_backend_free();
 
-    strcpy(result, res.c_str()); 
+    // Prevent buffer overflow by limiting the copy size
+    const size_t max_result_size = 99999999; // Match the Go side buffer size
+    const size_t copy_size = std::min(res.length(), max_result_size - 1);
+    
+    if (copy_size > 0) {
+        strncpy(result, res.c_str(), copy_size);
+        result[copy_size] = '\0'; // Ensure null termination
+    } else {
+        result[0] = '\0';
+    }
+    
+    // Log warning if result was truncated
+    if (res.length() >= max_result_size) {
+        fprintf(stderr, "%s: warning: result truncated from %zu to %zu bytes\n", 
+                __func__, res.length(), copy_size);
+    }
+    
     return 0;
 }
 
@@ -716,7 +781,7 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
             //LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx_tgt, last_tokens));
 
             const std::string token_str = llama_token_to_piece(ctx_tgt, id);
-            if (!tokenCallback(draft_model, (char*)token_str.c_str())) {
+            if (!tokenCallback(target_model, (char*)token_str.c_str())) {
                 break;
             }       
             res += token_str.c_str();
@@ -852,15 +917,46 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
         llama_grammar_free(grammar_dft);
         llama_grammar_free(grammar_tgt);
     }
-    strcpy(result, res.c_str()); 
+    
+    // Prevent buffer overflow by limiting the copy size
+    const size_t max_result_size = 99999999; // Match the Go side buffer size
+    const size_t copy_size = std::min(res.length(), max_result_size - 1);
+    
+    if (copy_size > 0) {
+        strncpy(result, res.c_str(), copy_size);
+        result[copy_size] = '\0'; // Ensure null termination
+    } else {
+        result[0] = '\0';
+    }
+    
+    // Log warning if result was truncated
+    if (res.length() >= max_result_size) {
+        fprintf(stderr, "%s: warning: result truncated from %zu to %zu bytes\n", 
+                __func__, res.length(), copy_size);
+    }
+    
     return 0;
 }
 
 void llama_binding_free_model(void *state_ptr) {
-    llama_binding_state* ctx = (llama_binding_state*) state_ptr;
-    llama_free(ctx->ctx);
-    llama_free_model(ctx->model);
-    delete ctx;
+    if (!state_ptr) return;
+    
+    llama_binding_state* state = (llama_binding_state*) state_ptr;
+    
+    // Free context first, then model
+    if (state->ctx) {
+        llama_free(state->ctx);
+        state->ctx = nullptr;
+    }
+    
+    if (state->model) {
+        llama_free_model(state->model);
+        state->model = nullptr;
+    }
+    
+    delete state;
+    // Note: llama_backend_free() should be called only once when the program exits,
+    // not for each model instance, as the backend is shared across all models
 }
 
 void llama_free_params(void* params_ptr) {
@@ -1006,6 +1102,96 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
     params->prompt = prompt;
     
     return params;
+}
+
+// Simple implementation of load_binding_model
+void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa, float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
+    gpt_params * lparams = new gpt_params;
+    llama_model * model;
+    llama_binding_state * state = new llama_binding_state;
+    llama_context * ctx;
+
+    lparams->model = fname;
+    lparams->n_ctx = n_ctx;
+    lparams->seed = n_seed;
+    lparams->memory_f16 = memory_f16;
+    lparams->use_mlock = mlock;
+    lparams->embedding = embeddings;
+    lparams->use_mmap = mmap;
+    lparams->low_vram = low_vram;
+    lparams->n_gpu_layers = n_gpu_layers;
+    lparams->n_batch = n_batch;
+    
+    lparams->lora_adapter = lora ? lora : "";
+    lparams->lora_base = lora_base ? lora_base : "";
+    lparams->perplexity = perplexity;
+    lparams->numa = numa;
+    lparams->rope_freq_base = rope_freq_base;
+    lparams->rope_freq_scale = rope_freq_scale;
+    lparams->mul_mat_q = mul_mat_q;
+
+    if (maingpu != NULL && strlen(maingpu) > 0) {
+        try {
+            lparams->main_gpu = std::stoi(maingpu);
+        } catch (const std::invalid_argument& e) {
+            fprintf(stderr, "Warning: Invalid main_gpu value '%s', using default 0\n", maingpu);
+            lparams->main_gpu = 0;
+        }
+    }
+
+#ifdef GGML_USE_CUBLAS
+    if (tensorsplit != NULL && strlen(tensorsplit) > 0) {
+        std::string arg_next = tensorsplit;
+        std::istringstream ss(arg_next);
+        std::string split_arg;
+        int i = 0;
+        while(std::getline(ss, split_arg, ',')) {
+            try {
+                lparams->tensor_split[i] = std::stof(split_arg);
+                i++;
+                if (i >= LLAMA_MAX_DEVICES) break;
+            } catch (const std::invalid_argument& e) {
+                fprintf(stderr, "Warning: Invalid tensor_split value '%s', skipping\n", split_arg.c_str());
+            }
+        }
+    }
+#endif
+
+    llama_backend_init(lparams->numa);
+
+    // Load the model
+    std::tie(model, ctx) = llama_init_from_gpt_params(*lparams);
+    if (model == NULL) {
+        fprintf(stderr, "%s: error: unable to load model\n", __func__);
+        delete state;
+        return nullptr;
+    }
+    
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: model loaded but context creation failed\n", __func__);
+        llama_free_model(model);
+        delete state;
+        return nullptr;
+    }
+    
+    // Verify the model and context are properly initialized
+    const int ctx_size = llama_n_ctx(ctx);
+    const int vocab_size = llama_n_vocab(ctx);
+    
+    if (ctx_size <= 0 || vocab_size <= 0) {
+        fprintf(stderr, "%s: error: invalid model initialization (n_ctx=%d, n_vocab=%d)\n", 
+                __func__, ctx_size, vocab_size);
+        llama_free(ctx);
+        llama_free_model(model);
+        delete state;
+        return nullptr;
+    }
+
+    state->model = model;
+    state->ctx = ctx;
+    
+    delete lparams;
+    return state;
 }
 
 void* load_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa, float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
@@ -1232,11 +1418,27 @@ llama_token llama_sample_token_binding(
     
     llama_token id = 0;
     
-    float * logits = llama_get_logits(ctx) + idx * n_vocab;
+    float * logits = llama_get_logits(ctx);
+    if (logits == nullptr) {
+        fprintf(stderr, "%s: error: llama_get_logits returned null\n", __func__);
+        return 0; // Return BOS token as fallback
+    }
+    
+    // Validate idx is within bounds
+    if (idx < -1 || idx >= n_ctx) {
+        fprintf(stderr, "%s: error: idx %d out of bounds (n_ctx=%d)\n", __func__, idx, n_ctx);
+        return 0;
+    }
+    
+    if (idx >= 0) {
+        logits += idx * n_vocab;
+    }
     
     // Apply params.logit_bias map
     for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
-        logits[it->first] += it->second;
+        if (it->first >= 0 && it->first < n_vocab) {
+            logits[it->first] += it->second;
+        }
     }
     
     candidates.clear();
@@ -1319,8 +1521,7 @@ Keeping them here in sync to generate again patches if needed.
 common.h:
 
 // Removed duplicate struct definition - already defined above
-
-void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity);
+// load_binding_model declaration is now in common.h via the patch
 
 llama_token llama_sample_token_binding(
                   struct llama_context * ctx,
@@ -1356,76 +1557,7 @@ gpt_params* create_gpt_params_cuda(const std::string& fname) {
     return lparams;
 }
 
-void* load_binding_model(const char *fname, int n_ctx, int n_seed, bool memory_f16, bool mlock, bool embeddings, bool mmap, bool low_vram, int n_gpu_layers, int n_batch, const char *maingpu, const char *tensorsplit, bool numa,  float rope_freq_base, float rope_freq_scale, bool mul_mat_q, const char *lora, const char *lora_base, bool perplexity) {
-    // load the model
-    gpt_params * lparams;
-// Temporary workaround for https://github.com/go-skynet/go-llama.cpp/issues/218
-#ifdef GGML_USE_CUBLAS
-    lparams = create_gpt_params_cuda(fname);
-#else
-    lparams = create_gpt_params(fname, lora, lora_base);
-#endif
-    llama_model * model;
-    llama_binding_state * state;
-    state = new llama_binding_state;
-    llama_context * ctx;
-    lparams->n_ctx      = n_ctx;
-    lparams->seed       = n_seed;
-    lparams->memory_f16     = memory_f16;
-    lparams->embedding  = embeddings;
-    lparams->use_mlock  = mlock;
-    lparams->n_gpu_layers = n_gpu_layers;
-    lparams->perplexity = perplexity;
-    lparams->use_mmap = mmap;
-
-    lparams->low_vram = low_vram;
-    if (rope_freq_base != 0.0f) {
-        lparams->rope_freq_base = rope_freq_base;
-    } else {
-        lparams->rope_freq_base = 10000.0f;
-    }
-
-    if (rope_freq_scale != 0.0f) {
-        lparams->rope_freq_scale = rope_freq_scale;
-    } else {
-        lparams->rope_freq_scale =  1.0f;
-    }
-
-    lparams->model = fname;
-    if (maingpu[0] != '\0') { 
-        lparams->main_gpu = std::stoi(maingpu);
-    }
-
-    if (tensorsplit[0] != '\0') { 
-        std::string arg_next = tensorsplit;
-            // split string by , and /
-            const std::regex regex{R"([,/]+)"};
-            std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex, -1};
-            std::vector<std::string> split_arg{it, {}};
-            GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
-
-            for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
-                if (i < split_arg.size()) {
-                    lparams->tensor_split[i] = std::stof(split_arg[i]);
-                } else {
-                    lparams->tensor_split[i] = 0.0f;
-                }
-            }  
-    }
-
-    lparams->n_batch      = n_batch;
-
-    llama_backend_init(numa);
-
-    std::tie(model, ctx) = llama_init_from_gpt_params(*lparams);
-    if (model == NULL) {
-        fprintf(stderr, "%s: error: unable to load model\n", __func__);
-        return nullptr;
-    }
-    state->ctx = ctx;
-    state->model= model;
-    return state;
-}
+// The load_binding_model implementation is now provided by the patched common.cpp
 
 // Note: the only difference here is passing params as a pointer and avoid copy-by-value
 // We stick to another function to avoid patching all the llama.cpp code

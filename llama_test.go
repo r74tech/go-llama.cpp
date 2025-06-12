@@ -3,10 +3,10 @@ package llama_test
 import (
 	"os"
 
-	"github.com/go-skynet/go-llama.cpp"
-	. "github.com/go-skynet/go-llama.cpp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/r74tech/go-llama.cpp"
+	. "github.com/r74tech/go-llama.cpp"
 )
 
 var _ = Describe("LLama binding", func() {

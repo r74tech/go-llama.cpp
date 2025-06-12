@@ -307,6 +307,8 @@ clean:
 	rm -rf *.a
 	$(MAKE) -C llama.cpp clean
 	rm -rf build
+	mkdir -p build
+	touch build/.gitkeep
 
 # Use a smaller model for faster testing (TinyLlama 1.1B instead of CodeLlama 7B)
 ggllm-test-model.bin:
