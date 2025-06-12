@@ -1,4 +1,4 @@
-module github.com/go-skynet/go-llama.cpp
+module github.com/r74tech/go-llama.cpp
 
 go 1.23.0
 

@@ -8,24 +8,25 @@ import (
 	"runtime"
 	"strings"
 
-	llama "github.com/go-skynet/go-llama.cpp"
+	llama "github.com/r74tech/go-llama.cpp"
 )
 
 // Embed the model file at compile time
 // Replace this with your actual model file path
+//
 //go:embed model.gguf
 var embeddedModel []byte
 
 func main() {
 	var (
-		threads    = flag.Int("t", runtime.NumCPU(), "number of threads to use during computation")
-		tokens     = flag.Int("n", 128, "number of tokens to predict")
-		prompt     = flag.String("p", "Hello, world!", "prompt to generate text from")
+		threads     = flag.Int("t", runtime.NumCPU(), "number of threads to use during computation")
+		tokens      = flag.Int("n", 128, "number of tokens to predict")
+		prompt      = flag.String("p", "Hello, world!", "prompt to generate text from")
 		contextSize = flag.Int("c", 512, "context size")
 		temperature = flag.Float64("temp", 0.8, "temperature for sampling")
-		topK       = flag.Int("top_k", 40, "top-k sampling")
-		topP       = flag.Float64("top_p", 0.95, "top-p sampling")
-		gpuLayers  = flag.Int("ngl", 0, "number of layers to store in VRAM")
+		topK        = flag.Int("top_k", 40, "top-k sampling")
+		topP        = flag.Float64("top_p", 0.95, "top-p sampling")
+		gpuLayers   = flag.Int("ngl", 0, "number of layers to store in VRAM")
 	)
 	flag.Parse()
 
@@ -36,7 +37,7 @@ func main() {
 
 	// Load model from embedded bytes
 	fmt.Printf("Loading embedded model (size: %.2f MB)...\n", float64(len(embeddedModel))/(1024*1024))
-	
+
 	model, err := llama.NewFromMemory(embeddedModel, llama.SetContext(*contextSize), llama.SetGPULayers(*gpuLayers))
 	if err != nil {
 		log.Fatalf("Failed to load model from memory: %v", err)
@@ -50,7 +51,7 @@ func main() {
 	fmt.Println("\nGenerating response...\n")
 
 	var response strings.Builder
-	
+
 	_, err = model.Predict(*prompt, llama.SetTokens(*tokens), llama.SetThreads(*threads),
 		llama.SetTemperature(float32(*temperature)),
 		llama.SetTopK(*topK),
@@ -60,7 +61,7 @@ func main() {
 			fmt.Print(token)
 			return true
 		}))
-	
+
 	if err != nil {
 		log.Fatalf("Failed to generate text: %v", err)
 	}
