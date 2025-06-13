@@ -1,9 +1,9 @@
-#include "common.h"
+#include "common/common.h"
 #include "llama.h"
 
 #include "binding.h"
 
-#include "grammar-parser.h"
+#include "common/grammar-parser.h"
 #include "llama_data_source.h"
 #include <cassert>
 #include <cinttypes>
@@ -1092,84 +1092,14 @@ void* load_binding_model_from_memory(const void* buffer, size_t buffer_size, int
     
     fprintf(stderr, "%s: valid GGUF file detected, size: %zu MB\n", __func__, buffer_size / (1024*1024));
     
-#ifdef __linux__
-    // On Linux, use memfd_create for in-memory file
-    int fd = binding_memfd_create("llama_model", MFD_CLOEXEC);
-    if (fd < 0) {
-        fprintf(stderr, "%s: error: memfd_create failed: %s\n", __func__, strerror(errno));
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    // Write the buffer to the memory file
-    ssize_t written = write(fd, buffer, buffer_size);
-    if (written != (ssize_t)buffer_size) {
-        fprintf(stderr, "%s: error: failed to write model to memory file\n", __func__);
-        close(fd);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    // Seek back to beginning
-    lseek(fd, 0, SEEK_SET);
-    
-    // Create a file path from file descriptor
-    char fd_path[256];
-    snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
-    
-    fprintf(stderr, "%s: loading model from memory file\n", __func__);
-    
-    // Load the model from the memory file
-    model = llama_load_model_from_file(fd_path, ctx_params);
-    
-    // Close the file descriptor
-    close(fd);
-    
-#elif defined(_WIN32)
-    // Windows: Use the patched llama_load_model_from_buffer directly
-    fprintf(stderr, "%s: loading model from memory buffer on Windows\n", __func__);
+    // Use the patched llama_load_model_from_buffer directly on all platforms
+    fprintf(stderr, "%s: loading model from memory buffer\n", __func__);
     
     // The patch provides llama_load_model_from_buffer, so we can use it directly
     model = llama_load_model_from_buffer(buffer, buffer_size, ctx_params);
     
     if (model == nullptr) {
         fprintf(stderr, "%s: error: failed loading model from memory buffer\n", __func__);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-#else
-    // Fallback: use regular temporary file
-    char temp_path[] = "/tmp/llama_model_XXXXXX";
-    int fd = mkstemp(temp_path);
-    if (fd < 0) {
-        fprintf(stderr, "%s: error: failed to create temporary file: %s\n", __func__, strerror(errno));
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    ssize_t written = write(fd, buffer, buffer_size);
-    close(fd);
-    
-    if (written != (ssize_t)buffer_size) {
-        fprintf(stderr, "%s: error: failed to write model to temporary file\n", __func__);
-        unlink(temp_path);
-        delete lparams;
-        delete state;
-        return nullptr;
-    }
-    
-    fprintf(stderr, "%s: loading model from temporary file: %s\n", __func__, temp_path);
-    model = llama_load_model_from_file(temp_path, ctx_params);
-    unlink(temp_path);
-#endif
-    
-    if (model == nullptr) {
-        fprintf(stderr, "%s: error: failed loading model from temporary file\n", __func__);
         delete lparams;
         delete state;
         return nullptr;
