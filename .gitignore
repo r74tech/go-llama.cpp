@@ -21,3 +21,7 @@ ggllm-test-model.bin
 
 # model files
 **/*.gguf
+
+# build cache
+*.o
+*.log
