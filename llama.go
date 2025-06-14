@@ -25,6 +25,8 @@ type LLama struct {
 	modelData   []byte
 	// C memory pointer for model data (needs to be freed)
 	cModelData  unsafe.Pointer
+	// Mutex to protect concurrent predict calls
+	predictMu   sync.Mutex
 }
 
 func New(model string, opts ...ModelOption) (*LLama, error) {
@@ -156,6 +158,10 @@ func (l *LLama) TokenEmbeddings(tokens []int, opts ...PredictOption) ([]float32,
 	if !l.embeddings {
 		return []float32{}, fmt.Errorf("model loaded without embeddings")
 	}
+	
+	// Protect against concurrent token embeddings calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
 
 	po := NewPredictOptions(opts...)
 
@@ -204,6 +210,10 @@ func (l *LLama) Embeddings(text string, opts ...PredictOption) ([]float32, error
 	if !l.embeddings {
 		return []float32{}, fmt.Errorf("model loaded without embeddings")
 	}
+	
+	// Protect against concurrent embeddings calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
 
 	po := NewPredictOptions(opts...)
 
@@ -244,6 +254,10 @@ func (l *LLama) Embeddings(text string, opts ...PredictOption) ([]float32, error
 }
 
 func (l *LLama) Eval(text string, opts ...PredictOption) error {
+	// Protect against concurrent eval calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+	
 	po := NewPredictOptions(opts...)
 
 	input := C.CString(text)
@@ -284,6 +298,14 @@ func (l *LLama) Eval(text string, opts ...PredictOption) error {
 }
 
 func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOption) (string, error) {
+	// Protect against concurrent predictions
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+	if ll != l {
+		ll.predictMu.Lock()
+		defer ll.predictMu.Unlock()
+	}
+	
 	po := NewPredictOptions(opts...)
 
 	if po.TokenCallback != nil {
@@ -342,6 +364,10 @@ func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOptio
 }
 
 func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
+	// Protect against concurrent predictions
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+	
 	po := NewPredictOptions(opts...)
 
 	if po.TokenCallback != nil {
@@ -349,6 +375,7 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	}
 
 	input := C.CString(text)
+	defer C.free(unsafe.Pointer(input))
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
 	}
@@ -360,20 +387,35 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	for i, s := range po.StopPrompts {
 		cs := C.CString(s)
 		reversePrompt[i] = cs
+		defer C.free(unsafe.Pointer(cs))
 		pass = &reversePrompt[0]
 	}
+
+	// Allocate C strings and ensure they are freed
+	logitBias := C.CString(po.LogitBias)
+	defer C.free(unsafe.Pointer(logitBias))
+	pathPromptCache := C.CString(po.PathPromptCache)
+	defer C.free(unsafe.Pointer(pathPromptCache))
+	mainGPU := C.CString(po.MainGPU)
+	defer C.free(unsafe.Pointer(mainGPU))
+	tensorSplit := C.CString(po.TensorSplit)
+	defer C.free(unsafe.Pointer(tensorSplit))
+	grammar := C.CString(po.Grammar)
+	defer C.free(unsafe.Pointer(grammar))
+	negativePrompt := C.CString(po.NegativePrompt)
+	defer C.free(unsafe.Pointer(negativePrompt))
 
 	params := C.llama_allocate_params(input, C.int(po.Seed), C.int(po.Threads), C.int(po.Tokens), C.int(po.TopK),
 		C.float(po.TopP), C.float(po.Temperature), C.float(po.Penalty), C.int(po.Repeat),
 		C.bool(po.IgnoreEOS), C.bool(po.F16KV),
 		C.int(po.Batch), C.int(po.NKeep), pass, C.int(reverseCount),
 		C.float(po.TailFreeSamplingZ), C.float(po.TypicalP), C.float(po.FrequencyPenalty), C.float(po.PresencePenalty),
-		C.int(po.Mirostat), C.float(po.MirostatETA), C.float(po.MirostatTAU), C.bool(po.PenalizeNL), C.CString(po.LogitBias),
-		C.CString(po.PathPromptCache), C.bool(po.PromptCacheAll), C.bool(po.MLock), C.bool(po.MMap),
-		C.CString(po.MainGPU), C.CString(po.TensorSplit),
+		C.int(po.Mirostat), C.float(po.MirostatETA), C.float(po.MirostatTAU), C.bool(po.PenalizeNL), logitBias,
+		pathPromptCache, C.bool(po.PromptCacheAll), C.bool(po.MLock), C.bool(po.MMap),
+		mainGPU, tensorSplit,
 		C.bool(po.PromptCacheRO),
-		C.CString(po.Grammar),
-		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), C.CString(po.NegativePrompt),
+		grammar,
+		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), negativePrompt,
 		C.int(po.NDraft),
 	)
 	ret := C.llama_predict(params, l.state, (*C.char)(unsafe.Pointer(&out[0])), C.bool(po.DebugMode))

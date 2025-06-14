@@ -163,11 +163,14 @@ int eval(void* params_ptr,void* state_pr,char *text) {
     return llama_eval(ctx, tokens.data(), n_prompt_tokens, n_past, params_p->n_threads);
 }
 
-static llama_context ** g_ctx;
-static gpt_params               * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
+// Thread-local storage for callback context
+thread_local struct {
+    llama_context ** ctx;
+    gpt_params * params;
+    std::vector<llama_token> * input_tokens;
+    std::ostringstream * output_ss;
+    std::vector<llama_token> * output_tokens;
+} g_callback_context;
 
 int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     gpt_params* params_p = (gpt_params*) params_ptr;
@@ -175,7 +178,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     llama_context* ctx = state->ctx;
 
     gpt_params params = *params_p;
-    g_params = &params;
+    g_callback_context.params = &params;
     const int n_ctx = llama_n_ctx(ctx);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
@@ -201,7 +204,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
         params.n_ctx = 8;
     }
     llama_context * ctx_guidance = NULL;
-    g_ctx = &ctx;
+    g_callback_context.ctx = &ctx;
     
     if (params.cfg_scale > 1.f) {
         struct llama_context_params lparams = llama_context_params_from_gpt_params(params);
@@ -351,9 +354,9 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     int n_session_consumed = 0;
     int n_past_guidance    = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;  g_callback_context.input_tokens  = &input_tokens;
+    std::vector<int>   output_tokens; g_callback_context.output_tokens = &output_tokens;
+    std::ostringstream output_ss;     g_callback_context.output_ss     = &output_ss;
 
     // the first thing we will do is to output the prompt, so set color accordingly
 
