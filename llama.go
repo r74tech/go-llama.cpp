@@ -7,6 +7,7 @@ package llama
 // #cgo windows LDFLAGS: -static -static-libgcc -static-libstdc++ -lpthread
 // #include "binding.h"
 // #include <stdlib.h>
+// #include <string.h>
 import "C"
 import (
 	"fmt"
@@ -20,6 +21,10 @@ type LLama struct {
 	state       unsafe.Pointer
 	embeddings  bool
 	contextSize int
+	// Keep a reference to the model data to prevent GC
+	modelData   []byte
+	// C memory pointer for model data (needs to be freed)
+	cModelData  unsafe.Pointer
 }
 
 func New(model string, opts ...ModelOption) (*LLama, error) {
@@ -66,11 +71,27 @@ func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
 		MulMatQ = *mo.MulMatQ
 	}
 
-	// Convert Go []byte to C pointer
-	dataPtr := unsafe.Pointer(&modelData[0])
-	dataSize := C.size_t(len(modelData))
+	// Make a copy of the model data to ensure it's not moved by GC
+	// This copy will be owned by the LLama struct
+	modelDataCopy := make([]byte, len(modelData))
+	copy(modelDataCopy, modelData)
 
-	result := C.load_model_from_memory(dataPtr, dataSize,
+	// Allocate C memory for the model data to ensure it's not moved by Go's GC
+	dataSize := C.size_t(len(modelDataCopy))
+	cDataPtr := C.malloc(dataSize)
+	if cDataPtr == nil {
+		return nil, fmt.Errorf("failed to allocate memory for model data")
+	}
+
+	// Copy the data to C memory
+	C.memcpy(cDataPtr, unsafe.Pointer(&modelDataCopy[0]), dataSize)
+	
+	// Debug: Print memory info
+	if os.Getenv("LLAMA_DEBUG") != "" {
+		fmt.Printf("NewFromMemory: allocated %d bytes at %p\n", dataSize, cDataPtr)
+	}
+
+	result := C.load_model_from_memory(cDataPtr, dataSize,
 		C.int(mo.ContextSize), C.int(mo.Seed),
 		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
 		C.int(mo.NGPULayers), C.int(mo.NBatch), C.CString(mo.MainGPU), C.CString(mo.TensorSplit), C.bool(mo.NUMA),
@@ -79,15 +100,27 @@ func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
 	)
 
 	if result == nil {
+		C.free(cDataPtr)
 		return nil, fmt.Errorf("failed loading model from memory")
 	}
 
-	ll := &LLama{state: result, contextSize: mo.ContextSize, embeddings: mo.Embeddings}
+	ll := &LLama{
+		state:       result,
+		contextSize: mo.ContextSize,
+		embeddings:  mo.Embeddings,
+		modelData:   modelDataCopy, // Keep a reference to prevent GC
+		cModelData:  cDataPtr,      // Store C pointer to free later
+	}
 	return ll, nil
 }
 
 func (l *LLama) Free() {
 	C.llama_binding_free_model(l.state)
+	// Free the C-allocated model data if it exists
+	if l.cModelData != nil {
+		C.free(l.cModelData)
+		l.cModelData = nil
+	}
 }
 
 func (l *LLama) LoadState(state string) error {
