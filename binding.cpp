@@ -72,12 +72,6 @@ void sigint_handler(int signo) {
 }
 #endif
 
-// Note: llama_binding_state structure is now defined in common.h via the patch
-// If not defined by the patch, define it here
-struct llama_binding_state {
-    llama_context * ctx;
-    llama_model * model;
-};
 
 // Forward declarations
 // Note: load_binding_model is now provided by common.cpp via the patch
