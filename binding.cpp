@@ -508,7 +508,9 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
             // call the token callback, no need to check if one is actually registered, that will
             // be handled on the Go side.
             auto token_str = llama_token_to_piece(ctx, id);
-            if (!tokenCallback(state_pr, (char*)token_str.c_str())) {
+            // Create a mutable copy for the callback to avoid casting away const
+            std::string token_str_copy = token_str;
+            if (!tokenCallback(state_pr, const_cast<char*>(token_str_copy.c_str()))) {
                 break;
             }
         } else {
@@ -711,7 +713,9 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
             //LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx_tgt, last_tokens));
 
             const std::string token_str = llama_token_to_piece(ctx_tgt, id);
-            if (!tokenCallback(draft_model, (char*)token_str.c_str())) {
+            // Create a mutable copy for the callback to avoid casting away const
+            std::string token_str_copy = token_str;
+            if (!tokenCallback(draft_model, const_cast<char*>(token_str_copy.c_str()))) {
                 break;
             }       
             res += token_str.c_str();
