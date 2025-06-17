@@ -73,6 +73,11 @@ void sigint_handler(int signo) {
 #endif
 
 // Note: llama_binding_state structure is now defined in common.h via the patch
+// If not defined by the patch, define it here
+struct llama_binding_state {
+    llama_context * ctx;
+    llama_model * model;
+};
 
 // Forward declarations
 // Note: load_binding_model is now provided by common.cpp via the patch
@@ -163,14 +168,6 @@ int eval(void* params_ptr,void* state_pr,char *text) {
     return llama_eval(ctx, tokens.data(), n_prompt_tokens, n_past, params_p->n_threads);
 }
 
-// Thread-local storage for callback context
-thread_local struct {
-    llama_context ** ctx;
-    gpt_params * params;
-    std::vector<llama_token> * input_tokens;
-    std::ostringstream * output_ss;
-    std::vector<llama_token> * output_tokens;
-} g_callback_context;
 
 int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     gpt_params* params_p = (gpt_params*) params_ptr;
@@ -178,7 +175,6 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     llama_context* ctx = state->ctx;
 
     gpt_params params = *params_p;
-    g_callback_context.params = &params;
     const int n_ctx = llama_n_ctx(ctx);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
@@ -204,7 +200,6 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
         params.n_ctx = 8;
     }
     llama_context * ctx_guidance = NULL;
-    g_callback_context.ctx = &ctx;
     
     if (params.cfg_scale > 1.f) {
         struct llama_context_params lparams = llama_context_params_from_gpt_params(params);
@@ -354,9 +349,9 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
     int n_session_consumed = 0;
     int n_past_guidance    = 0;
 
-    std::vector<int>   input_tokens;  g_callback_context.input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_callback_context.output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_callback_context.output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
 
     // the first thing we will do is to output the prompt, so set color accordingly
 
@@ -607,7 +602,6 @@ end:
         llama_grammar_free(grammar);
     }
 
-    llama_backend_free();
 
     strcpy(result, res.c_str()); 
     return 0;

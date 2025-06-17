@@ -12,6 +12,7 @@ import "C"
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -379,7 +380,16 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
 	}
-	out := make([]byte, po.Tokens)
+	
+	// Allocate C memory for output to avoid Go GC issues
+	outSize := C.size_t(po.Tokens)
+	outPtr := C.malloc(outSize)
+	if outPtr == nil {
+		return "", fmt.Errorf("failed to allocate memory for output")
+	}
+	defer C.free(outPtr)
+	// Clear the allocated memory
+	C.memset(outPtr, 0, outSize)
 
 	reverseCount := len(po.StopPrompts)
 	reversePrompt := make([]*C.char, reverseCount)
@@ -418,11 +428,13 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), negativePrompt,
 		C.int(po.NDraft),
 	)
-	ret := C.llama_predict(params, l.state, (*C.char)(unsafe.Pointer(&out[0])), C.bool(po.DebugMode))
+	defer C.llama_free_params(params)
+	
+	ret := C.llama_predict(params, l.state, (*C.char)(outPtr), C.bool(po.DebugMode))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}
-	res := C.GoString((*C.char)(unsafe.Pointer(&out[0])))
+	res := C.GoString((*C.char)(outPtr))
 
 	res = strings.TrimPrefix(res, " ")
 	res = strings.TrimPrefix(res, text)
@@ -432,12 +444,13 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 		res = strings.TrimRight(res, s)
 	}
 
-	C.llama_free_params(params)
-
 	if po.TokenCallback != nil {
 		setCallback(l.state, nil)
 	}
 
+	// Ensure the LLama struct doesn't get garbage collected while C code is using it
+	runtime.KeepAlive(l)
+	
 	return res, nil
 }
 
