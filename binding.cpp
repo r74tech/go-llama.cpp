@@ -163,7 +163,7 @@ int eval(void* params_ptr,void* state_pr,char *text) {
 }
 
 
-int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug) {
+int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_size, bool debug) {
     gpt_params* params_p = (gpt_params*) params_ptr;
     llama_binding_state* state = (llama_binding_state*) state_pr;
     llama_context* ctx = state->ctx;
@@ -597,14 +597,18 @@ end:
     }
 
 
-    strcpy(result, res.c_str()); 
+    // Safe copy with bounds checking
+    if (result_size > 0) {
+        strncpy(result, res.c_str(), result_size - 1);
+        result[result_size - 1] = '\0';  // Ensure null termination
+    } 
     return 0;
 }
 
 // this is a bit of a hack now - ideally this should be in the predict function
 // and be transparent to the caller, however this now maps 1:1 (mostly) the upstream implementation
 // Note: both model have to be loaded with perplexity "true" to enable all logits
-int speculative_sampling(void* params_ptr, void* target_model, void* draft_model, char* result, bool debug) {
+int speculative_sampling(void* params_ptr, void* target_model, void* draft_model, char* result, size_t result_size, bool debug) {
 
     gpt_params* params_p = (gpt_params*) params_ptr;
     llama_binding_state* target_model_state = (llama_binding_state*) target_model;
@@ -843,15 +847,28 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
         llama_grammar_free(grammar_dft);
         llama_grammar_free(grammar_tgt);
     }
-    strcpy(result, res.c_str()); 
+    // Safe copy with bounds checking
+    if (result_size > 0) {
+        strncpy(result, res.c_str(), result_size - 1);
+        result[result_size - 1] = '\0';  // Ensure null termination
+    } 
     return 0;
 }
 
 void llama_binding_free_model(void *state_ptr) {
-    llama_binding_state* ctx = (llama_binding_state*) state_ptr;
-    llama_free(ctx->ctx);
-    llama_free_model(ctx->model);
-    delete ctx;
+    if (state_ptr == nullptr) {
+        return;
+    }
+    llama_binding_state* state = (llama_binding_state*) state_ptr;
+    if (state->ctx != nullptr) {
+        llama_free(state->ctx);
+        state->ctx = nullptr;
+    }
+    if (state->model != nullptr) {
+        llama_free_model(state->model);
+        state->model = nullptr;
+    }
+    delete state;
 }
 
 void llama_free_params(void* params_ptr) {

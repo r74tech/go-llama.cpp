@@ -341,7 +341,7 @@ func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOptio
 		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), C.CString(po.NegativePrompt),
 		C.int(po.NDraft),
 	)
-	ret := C.speculative_sampling(params, l.state, ll.state, (*C.char)(unsafe.Pointer(&out[0])), C.bool(po.DebugMode))
+	ret := C.speculative_sampling(params, l.state, ll.state, (*C.char)(unsafe.Pointer(&out[0])), C.size_t(len(out)), C.bool(po.DebugMode))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}
@@ -430,7 +430,7 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	)
 	defer C.llama_free_params(params)
 	
-	ret := C.llama_predict(params, l.state, (*C.char)(outPtr), C.bool(po.DebugMode))
+	ret := C.llama_predict(params, l.state, (*C.char)(outPtr), outSize, C.bool(po.DebugMode))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}

@@ -69,7 +69,7 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
                             bool prompt_cache_ro, const char *grammar, float rope_freq_base, float rope_freq_scale, float negative_prompt_scale, const char* negative_prompt,
                             int n_draft);
 
-int speculative_sampling(void* params_ptr, void* target_model, void* draft_model, char* result, bool debug);
+int speculative_sampling(void* params_ptr, void* target_model, void* draft_model, char* result, size_t result_size, bool debug);
 
 void llama_free_params(void* params_ptr);
 
@@ -77,7 +77,7 @@ void llama_binding_free_model(void* state);
 
 int llama_tokenize_string(void* params_ptr, void* state_pr, int* result);
 
-int llama_predict(void* params_ptr, void* state_pr, char* result, bool debug);
+int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_size, bool debug);
 
 #ifdef __cplusplus
 }
