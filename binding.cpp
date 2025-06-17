@@ -943,17 +943,21 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
     params->repeat_penalty = repeat_penalty;
     params->n_batch = n_batch;
     params->n_keep = n_keep;
-    params->grammar = std::string(grammar);
+    if (grammar != nullptr && grammar[0] != '\0') {
+        params->grammar = std::string(grammar);
+    }
     params->rope_freq_base = rope_freq_base;
     params->rope_freq_scale = rope_freq_scale;
     params->cfg_scale = negative_prompt_scale;
-    params->cfg_negative_prompt = std::string(negative_prompt);
+    if (negative_prompt != nullptr && negative_prompt[0] != '\0') {
+        params->cfg_negative_prompt = std::string(negative_prompt);
+    }
     params->n_draft = n_draft;
-    if (maingpu[0] != '\0') { 
+    if (maingpu != nullptr && maingpu[0] != '\0') { 
         params->main_gpu = std::stoi(maingpu);
     }
 
-    if (tensorsplit[0] != '\0') { 
+    if (tensorsplit != nullptr && tensorsplit[0] != '\0') { 
         std::string arg_next = tensorsplit;
             // split string by , and /
             const std::regex regex{R"([,/]+)"};
@@ -971,7 +975,9 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
     }
 
     params->prompt_cache_all = prompt_cache_all;
-    params->path_prompt_cache = session_file;
+    if (session_file != nullptr && session_file[0] != '\0') {
+        params->path_prompt_cache = session_file;
+    }
 
     if (ignore_eos) {
         params->ignore_eos = true;
@@ -986,15 +992,19 @@ void* llama_allocate_params(const char *prompt, int seed, int threads, int token
     params->mirostat_eta = mirostat_eta;
     params->mirostat_tau = mirostat_tau;
     params->penalize_nl = penalize_nl;
-    std::stringstream ss(logit_bias);
-    llama_token key;
-    char sign;
-    std::string value_str;
-    if (ss >> key && ss >> sign && std::getline(ss, value_str) && (sign == '+' || sign == '-')) {
-        params->logit_bias[key] = std::stof(value_str) * ((sign == '-') ? -1.0f : 1.0f);
+    if (logit_bias != nullptr && logit_bias[0] != '\0') {
+        std::stringstream ss(logit_bias);
+        llama_token key;
+        char sign;
+        std::string value_str;
+        if (ss >> key && ss >> sign && std::getline(ss, value_str) && (sign == '+' || sign == '-')) {
+            params->logit_bias[key] = std::stof(value_str) * ((sign == '-') ? -1.0f : 1.0f);
+        }
     } 
     params->frequency_penalty = frequency_penalty;
-    params->prompt = prompt;
+    if (prompt != nullptr) {
+        params->prompt = prompt;
+    }
     
     return params;
 }
