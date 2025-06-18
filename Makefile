@@ -70,12 +70,16 @@ ifdef IS_WINDOWS
 	# Use standard flags for Windows builds
 	CFLAGS = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC
 	CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC
+	# MinGW requires static linking of libstdc++ to avoid symbol issues
+	LDFLAGS = -static-libgcc -static-libstdc++ -Wl,--whole-archive -lpthread -Wl,--no-whole-archive
 	# Add to CMAKE_ARGS to ensure CMake uses the same flags
 	# Also set CMAKE_CXX_STANDARD to force C++11 standard
 	CMAKE_ARGS += -DCMAKE_C_FLAGS="-O3 -DNDEBUG -std=c11 -fPIC" \
 	              -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -std=c++11 -fPIC" \
 	              -DCMAKE_CXX_STANDARD=11 \
-	              -DCMAKE_CXX_STANDARD_REQUIRED=ON
+	              -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+	              -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
+	              -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static-libstdc++"
 endif
 
 # warnings
@@ -345,10 +349,6 @@ endif
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
 	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
-ifdef IS_WINDOWS
-	cd llama.cpp && patch -p1 < ../patches/mingw-codecvt-fix.patch
-	cd llama.cpp && patch -p1 < ../patches/mingw-win32-memory-range.patch
-endif
 	touch $@
 
 libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
