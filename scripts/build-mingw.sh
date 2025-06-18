@@ -39,8 +39,8 @@ export CXX=$CXX
 export AR=$AR
 
 # Set compilation flags for MinGW compatibility
-export CFLAGS="-O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
-export CXXFLAGS="-O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
+export CFLAGS="-O3 -DNDEBUG -std=c11 -fPIC"
+export CXXFLAGS="-O3 -DNDEBUG -std=c++11 -fPIC"
 export LDFLAGS="-static-libgcc -static-libstdc++ -lm"
 
 # Additional flags for cross-compilation
@@ -71,12 +71,12 @@ if [ -f "libbinding.a" ]; then
     echo -e "${GREEN}Library information:${NC}"
     file libbinding.a
     
-    # Check for C++11 ABI symbols (should NOT be present with our flags)
-    echo -e "${GREEN}Checking for C++11 ABI symbols (should be empty):${NC}"
+    # Check for C++11 ABI symbols
+    echo -e "${GREEN}Checking for C++11 ABI symbols:${NC}"
     if [ $IS_CROSS_COMPILE -eq 1 ]; then
-        x86_64-w64-mingw32-nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found (good!)"
+        x86_64-w64-mingw32-nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found"
     else
-        nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found (good!)"
+        nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found"
     fi
     
     # Check for llama symbols
@@ -94,15 +94,15 @@ if [ -f "libbinding.a" ]; then
     if [ $IS_CROSS_COMPILE -eq 1 ]; then
         x86_64-w64-mingw32-ar x ../libbinding.a
         echo "Checking binding.o for ABI symbols:"
-        x86_64-w64-mingw32-nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o (good!)"
+        x86_64-w64-mingw32-nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o"
         echo "Checking llama.o for ABI symbols:"
-        x86_64-w64-mingw32-nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o (good!)"
+        x86_64-w64-mingw32-nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o"
     else
         ar x ../libbinding.a
         echo "Checking binding.o for ABI symbols:"
-        nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o (good!)"
+        nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o"
         echo "Checking llama.o for ABI symbols:"
-        nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o (good!)"
+        nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o"
     fi
     cd ..
     rm -rf temp_check

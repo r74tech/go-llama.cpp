@@ -67,13 +67,13 @@ LDFLAGS  =
 
 # Ensure consistent ABI across all object files
 ifdef IS_WINDOWS
-	# Always use these flags for Windows to ensure ABI consistency
-	CFLAGS = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0
-	CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0
+	# Use standard flags for Windows builds
+	CFLAGS = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC
+	CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC
 	# Add to CMAKE_ARGS to ensure CMake uses the same flags
 	# Also set CMAKE_CXX_STANDARD to force C++11 standard
-	CMAKE_ARGS += -DCMAKE_C_FLAGS="-O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0" \
-	              -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0" \
+	CMAKE_ARGS += -DCMAKE_C_FLAGS="-O3 -DNDEBUG -std=c11 -fPIC" \
+	              -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -std=c++11 -fPIC" \
 	              -DCMAKE_CXX_STANDARD=11 \
 	              -DCMAKE_CXX_STANDARD_REQUIRED=ON
 endif
@@ -256,7 +256,7 @@ $(info )
 
 # Debug output for Windows builds
 ifdef IS_WINDOWS
-$(info I Windows build detected - forcing old C++ ABI)
+$(info I Windows build detected)
 $(info I Final CFLAGS: $(CFLAGS))
 $(info I Final CXXFLAGS: $(CXXFLAGS))
 $(info I Final CMAKE_ARGS: $(CMAKE_ARGS))
@@ -279,7 +279,6 @@ endif
 llama.cpp/ggml.o: prepare
 	mkdir -p build
 ifdef IS_WINDOWS
-	# Force old ABI for Windows builds
 	# Export flags to ensure CMake picks them up
 	cd build && \
 		export CFLAGS="$(CFLAGS)" && \
