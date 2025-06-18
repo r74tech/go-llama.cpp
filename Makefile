@@ -352,6 +352,7 @@ prepare:
 ifdef IS_WINDOWS
 	cd llama.cpp && patch -p1 < ../patches/mingw-codecvt-fix.patch
 	cd llama.cpp && patch -p1 < ../patches/mingw-win32-memory-range.patch
+	cd llama.cpp && patch -p1 < ../patches/mingw-seekp-seekg-fix.patch
 endif
 	touch $@
 
