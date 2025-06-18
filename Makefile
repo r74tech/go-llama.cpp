@@ -349,6 +349,9 @@ endif
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
 	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
+ifdef IS_WINDOWS
+	cd llama.cpp && patch -p1 < ../patches/mingw-win32-memory-range.patch
+endif
 	touch $@
 
 libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
