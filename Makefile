@@ -350,6 +350,7 @@ prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
 	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
 ifdef IS_WINDOWS
+	cd llama.cpp && patch -p1 < ../patches/mingw-codecvt-fix.patch
 	cd llama.cpp && patch -p1 < ../patches/mingw-win32-memory-range.patch
 endif
 	touch $@
