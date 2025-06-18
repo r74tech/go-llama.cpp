@@ -74,8 +74,14 @@ CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
 
 # Set object file extension based on platform
 ifdef IS_WINDOWS
-	OBJ_EXT := .obj
+	OBJ_EXT := .o
 	EXE_EXT := .exe
+	# MinGW-specific flags for cross-compilation compatibility
+	CFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+	CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+	LDFLAGS += -static-libgcc -static-libstdc++
+	# Ensure proper linking of C++ standard library components
+	LDFLAGS += -lstdc++ -lm
 else
 	OBJ_EXT := .o
 	EXE_EXT :=
@@ -288,10 +294,10 @@ else
 endif
 
 binding.o: prepare
-	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c
 
 llama_data_source.o: prepare
-	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common llama_data_source.cpp -o llama_data_source.o -c $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common llama_data_source.cpp -o llama_data_source.o -c
 
 ## https://github.com/ggerganov/llama.cpp/pull/1902
 prepare:
@@ -300,7 +306,17 @@ prepare:
 	touch $@
 
 libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
+ifdef IS_WINDOWS
+	# Use x86_64-w64-mingw32-ar if available for better cross-compilation compatibility
+	@if command -v x86_64-w64-mingw32-ar >/dev/null 2>&1; then \
+		echo "Using x86_64-w64-mingw32-ar"; \
+		x86_64-w64-mingw32-ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS); \
+	else \
+		ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS); \
+	fi
+else
 	ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
+endif
 
 clean:
 	rm -rf *.o

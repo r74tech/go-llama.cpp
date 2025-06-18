@@ -58,11 +58,16 @@ jobs:
       run: |
         brew install cmake
 
-    - name: Install MinGW (Windows)
+    - name: Install MinGW-w64 (Windows)
       if: matrix.os == 'windows-latest'
       run: |
+        # Install MinGW-w64 for better cross-compilation compatibility
         choco install mingw -y
         echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
+        # Verify installation
+        echo "MinGW-w64 version:"
+        gcc --version
+        g++ --version
 
     - name: Get llama.cpp commit
       id: get_commit
@@ -79,6 +84,12 @@ jobs:
           export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
           export CC=gcc
           export CXX=g++
+          # Set MinGW-specific flags for cross-compilation compatibility
+          export CFLAGS="-std=c11 -D_GLIBCXX_USE_CXX11_ABI=0"
+          export CXXFLAGS="-std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0"
+          export LDFLAGS="-static-libgcc -static-libstdc++ -lm"
+          # Ensure we're using static runtime libraries
+          export CGO_LDFLAGS="-static-libgcc -static-libstdc++"
         fi
         make clean
         if [ "${{ matrix.build_type }}" == "metal" ]; then
