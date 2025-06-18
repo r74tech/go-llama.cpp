@@ -18,6 +18,51 @@
 #include <sstream>
 #include <regex>
 #include <fcntl.h>
+
+// Helper functions to avoid std::string ABI issues on Windows MinGW
+// These wrap the raw C API instead of using the common.h std::string wrappers
+
+#ifdef _WIN32
+// Only use these wrappers on Windows to avoid ABI issues with MinGW
+// Tokenize without std::string to avoid ABI issues
+static std::vector<llama_token> tokenize_abi_safe(struct llama_context* ctx, const std::string& text, bool add_bos) {
+    // Estimate token count
+    int n_tokens = text.length() + (add_bos ? 1 : 0);
+    std::vector<llama_token> result(n_tokens);
+    
+    // Call the C API directly
+    n_tokens = llama_tokenize(ctx, text.c_str(), text.length(), result.data(), result.size(), add_bos);
+    
+    if (n_tokens < 0) {
+        result.resize(-n_tokens);
+        n_tokens = llama_tokenize(ctx, text.c_str(), text.length(), result.data(), result.size(), add_bos);
+    }
+    
+    result.resize(n_tokens);
+    return result;
+}
+
+// Token to string without std::string return to avoid ABI issues  
+static std::string token_to_piece_abi_safe(const struct llama_context* ctx, llama_token token) {
+    char buf[256];
+    int n = llama_token_to_piece(ctx, token, buf, sizeof(buf));
+    
+    if (n < 0) {
+        return "";
+    }
+    
+    return std::string(buf, n);
+}
+#else
+// On non-Windows platforms, just use the standard functions from common.h
+static inline std::vector<llama_token> tokenize_abi_safe(struct llama_context* ctx, const std::string& text, bool add_bos) {
+    return ::llama_tokenize(ctx, text, add_bos);
+}
+
+static inline std::string token_to_piece_abi_safe(const struct llama_context* ctx, llama_token token) {
+    return ::llama_token_to_piece(ctx, token);
+}
+#endif
 #include <errno.h>
 #include <time.h>
 #ifndef _WIN32
@@ -103,7 +148,8 @@ int get_embeddings(void* params_ptr, void* state_pr, float * res_embeddings) {
 
     const bool add_bos = llama_vocab_type(ctx) == LLAMA_VOCAB_TYPE_SPM;
     // tokenize the prompt
-    auto embd_inp = ::llama_tokenize(ctx, params.prompt, add_bos);
+    // Use ABI-safe wrapper
+    auto embd_inp = tokenize_abi_safe(ctx, params.prompt, add_bos);
 
 
     if (embd_inp.size() > 0) {
@@ -132,7 +178,7 @@ int get_token_embeddings(void* params_ptr, void* state_pr,  int *tokens, int tok
     gpt_params params = *params_p;
  
     for (int i = 0; i < tokenSize; i++) {
-        auto token_str = llama_token_to_piece(ctx, tokens[i]);
+        auto token_str = token_to_piece_abi_safe(ctx, tokens[i]);
         std::vector<std::string> my_vector;
         std::string str_token(token_str); // create a new std::string from the char*
         params_p->prompt += str_token;
@@ -234,7 +280,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
 
     std::vector<llama_token> embd_inp;
     if ( !params.prompt.empty() || session_tokens.empty() ) {
-        embd_inp = ::llama_tokenize(ctx, params.prompt, add_bos);
+        embd_inp = tokenize_abi_safe(ctx, params.prompt, add_bos);
     } else {
         embd_inp = session_tokens;
     }
@@ -248,8 +294,8 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
     int guidance_offset = 0;
     int original_prompt_len = 0;
     if (ctx_guidance) {
-        guidance_inp = ::llama_tokenize(ctx_guidance, params.cfg_negative_prompt, add_bos);
-        std::vector<llama_token> original_inp = ::llama_tokenize(ctx, params.prompt, add_bos);
+        guidance_inp = tokenize_abi_safe(ctx_guidance, params.cfg_negative_prompt, add_bos);
+        std::vector<llama_token> original_inp = tokenize_abi_safe(ctx, params.prompt, add_bos);
         original_prompt_len = original_inp.size();
         guidance_offset = (int)guidance_inp.size() - original_prompt_len;
     }
@@ -299,7 +345,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
             fprintf(stderr, "%s: negative prompt: '%s'\n", __func__, params.cfg_negative_prompt.c_str());
             fprintf(stderr, "%s: number of tokens in negative prompt = %zu\n", __func__, guidance_inp.size());
             for (int i = 0; i < (int) guidance_inp.size(); i++) {
-                fprintf(stderr, "%6d -> '%s'\n", guidance_inp[i], llama_token_to_piece(ctx, guidance_inp[i]).c_str());
+                fprintf(stderr, "%6d -> '%s'\n", guidance_inp[i], token_to_piece_abi_safe(ctx, guidance_inp[i]).c_str());
             }
     }
 
@@ -507,7 +553,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
 
             // call the token callback, no need to check if one is actually registered, that will
             // be handled on the Go side.
-            auto token_str = llama_token_to_piece(ctx, id);
+            auto token_str = token_to_piece_abi_safe(ctx, id);
             // Create a mutable copy for the callback to avoid casting away const
             std::string token_str_copy = token_str;
             if (!tokenCallback(state_pr, const_cast<char*>(token_str_copy.c_str()))) {
@@ -527,7 +573,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
         }
 
         for (auto id : embd) {
-            const std::string token_str = llama_token_to_piece(ctx, id);
+            const std::string token_str = token_to_piece_abi_safe(ctx, id);
             if (debug) {
               printf("%s", token_str.c_str());
             }
@@ -538,7 +584,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
                 output_tokens.push_back(id);
                 output_ss << token_str;
             }
-            res += llama_token_to_piece(ctx, id).c_str();
+            res += token_to_piece_abi_safe(ctx, id).c_str();
         }
 
      // if not currently processing queued inputs;
@@ -547,7 +593,7 @@ int llama_predict(void* params_ptr, void* state_pr, char* result, size_t result_
             if (params.antiprompt.size()) {
                 std::string last_output;
                 for (auto id : last_tokens) {
-                    last_output += llama_token_to_piece(ctx, id);
+                    last_output += token_to_piece_abi_safe(ctx, id);
                 }
 
                 // Check if each of the reverse prompts appears at the end of the output.
@@ -627,7 +673,7 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
 
     // tokenize the prompt
     std::vector<llama_token> inp;
-    inp = ::llama_tokenize(ctx_tgt, params.prompt, true);
+    inp = tokenize_abi_safe(ctx_tgt, params.prompt, true);
 
     const int max_context_size     = llama_n_ctx(ctx_tgt);
     const int max_tokens_list_size = max_context_size - 4;
@@ -712,7 +758,7 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
 
             //LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx_tgt, last_tokens));
 
-            const std::string token_str = llama_token_to_piece(ctx_tgt, id);
+            const std::string token_str = token_to_piece_abi_safe(ctx_tgt, id);
             // Create a mutable copy for the callback to avoid casting away const
             std::string token_str_copy = token_str;
             if (!tokenCallback(draft_model, const_cast<char*>(token_str_copy.c_str()))) {
@@ -739,7 +785,7 @@ int speculative_sampling(void* params_ptr, void* target_model, void* draft_model
 
             if (i_dft < (int) drafted.size()) {
                 LOG("the %dth drafted token (%d, '%s') does not match the sampled target token (%d, '%s') - rejected\n",
-                        i_dft, drafted[i_dft], llama_token_to_piece(ctx_dft, drafted[i_dft]).c_str(), id, token_str.c_str());
+                        i_dft, drafted[i_dft], token_to_piece_abi_safe(ctx_dft, drafted[i_dft]).c_str(), id, token_str.c_str());
             } else {
                 LOG("out of drafted tokens\n");
             }
@@ -1483,13 +1529,13 @@ llama_token llama_sample_token_binding(
 
                 for (int i = 0; i < n_top; i++) {
                     const llama_token id = cur_p.data[i].id;
-                    LOG(" - %5d: '%12s' (%.3f)\n", id, llama_token_to_piece(ctx, id).c_str(), cur_p.data[i].p);
+                    LOG(" - %5d: '%12s' (%.3f)\n", id, token_to_piece_abi_safe(ctx, id).c_str(), cur_p.data[i].p);
                 }
             }
 
             id = llama_sample_token(ctx, &cur_p);
 
-            LOG("sampled token: %5d: '%s'\n", id, llama_token_to_piece(ctx, id).c_str());
+            LOG("sampled token: %5d: '%s'\n", id, token_to_piece_abi_safe(ctx, id).c_str());
         }
     }
     // printf("`%d`", candidates_p.size);

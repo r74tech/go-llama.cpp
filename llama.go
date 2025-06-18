@@ -54,7 +54,7 @@ func New(model string, opts ...ModelOption) (*LLama, error) {
 	)
 
 	if result == nil {
-		return nil, fmt.Errorf("failed loading model")
+		return nil, fmt.Errorf("failed loading model from %s - model file may not exist or is invalid", model)
 	}
 
 	ll := &LLama{state: result, contextSize: mo.ContextSize, embeddings: mo.Embeddings}

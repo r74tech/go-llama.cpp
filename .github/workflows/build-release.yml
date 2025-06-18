@@ -79,23 +79,45 @@ jobs:
 
     - name: Build library
       shell: bash
+      env:
+        WINDOWS_FLAGS_SET: 1
       run: |
         if [ "${{ matrix.os }}" == "windows-latest" ]; then
           export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
           export CC=gcc
           export CXX=g++
           # Set MinGW-specific flags for cross-compilation compatibility
-          export CFLAGS="-std=c11 -D_GLIBCXX_USE_CXX11_ABI=0"
-          export CXXFLAGS="-std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0"
+          # IMPORTANT: Use old ABI (=0) for compatibility
+          export CFLAGS="-O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
+          export CXXFLAGS="-O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
           export LDFLAGS="-static-libgcc -static-libstdc++ -lm"
           # Ensure we're using static runtime libraries
           export CGO_LDFLAGS="-static-libgcc -static-libstdc++"
+          # Force environment for make
+          export WINDOWS_FLAGS_SET=1
+          echo "Build configuration:"
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+          echo "CFLAGS=$CFLAGS"
+          echo "CXXFLAGS=$CXXFLAGS"
+          echo "LDFLAGS=$LDFLAGS"
+          echo "WINDOWS_FLAGS_SET=$WINDOWS_FLAGS_SET"
+          # Check MinGW version and default ABI
+          echo "MinGW C++ compiler details:"
+          g++ -v 2>&1 | grep -E "(version|Target|Thread model|gcc version)"
+          echo "Default ABI check:"
+          echo '#include <iostream>' > test_abi.cpp
+          echo 'int main() { std::cout << _GLIBCXX_USE_CXX11_ABI << std::endl; return 0; }' >> test_abi.cpp
+          g++ -o test_abi test_abi.cpp && ./test_abi || echo "ABI test failed"
+          rm -f test_abi.cpp test_abi test_abi.exe
         fi
+        # Clean everything including CMake cache
         make clean
+        rm -rf build
         if [ "${{ matrix.build_type }}" == "metal" ]; then
-          BUILD_TYPE=metal make libbinding.a
+          BUILD_TYPE=metal CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" make libbinding.a VERBOSE=1
         else
-          make libbinding.a
+          CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" make libbinding.a VERBOSE=1
         fi
         
         # Check what was actually built
@@ -110,6 +132,28 @@ jobs:
         ls -la libbinding* 2>/dev/null || echo "No libbinding files found"
         echo "llama.cpp directory:"
         ls -la llama.cpp/*.o 2>/dev/null | head -10 || echo "No .o files in llama.cpp"
+        
+        # Check ABI symbols in Windows builds
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          echo "=== Checking ABI symbols in libbinding.a ==="
+          nm libbinding.a | grep -E "(cxx11|__cxx11)" | head -20 || echo "No C++11 ABI symbols found (good!)"
+          echo "=== Checking for llama symbols ==="
+          nm libbinding.a | grep -E "llama_tokenize|llama_token_to_piece" | head -10
+          echo "=== Detailed symbol check ==="
+          # Check for std::string related symbols
+          nm libbinding.a | grep -E "basic_string" | head -10
+          # Check specific object files
+          echo "=== Extracting and checking specific object files ==="
+          mkdir -p temp_check
+          cd temp_check
+          ar x ../libbinding.a
+          echo "Checking common.o symbols:"
+          nm common.o | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No problematic symbols in common.o"
+          echo "Checking binding.o symbols:"
+          nm binding.o | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No problematic symbols in binding.o"
+          cd ..
+          rm -rf temp_check
+        fi
 
     - name: Fetch llama.cpp at specific commit
       shell: bash

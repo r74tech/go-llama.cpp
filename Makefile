@@ -65,6 +65,19 @@ CFLAGS   = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC
 CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC
 LDFLAGS  =
 
+# Ensure consistent ABI across all object files
+ifdef IS_WINDOWS
+	# Always use these flags for Windows to ensure ABI consistency
+	CFLAGS = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0
+	CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0
+	# Add to CMAKE_ARGS to ensure CMake uses the same flags
+	# Also set CMAKE_CXX_STANDARD to force C++11 standard
+	CMAKE_ARGS += -DCMAKE_C_FLAGS="-O3 -DNDEBUG -std=c11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0" \
+	              -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -std=c++11 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0" \
+	              -DCMAKE_CXX_STANDARD=11 \
+	              -DCMAKE_CXX_STANDARD_REQUIRED=ON
+endif
+
 # warnings
 CFLAGS   += -Wall -Wextra -Wpedantic -Wcast-qual -Wdouble-promotion -Wshadow -Wstrict-prototypes -Wpointer-arith -Wno-unused-function
 CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
@@ -76,12 +89,12 @@ CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
 ifdef IS_WINDOWS
 	OBJ_EXT := .o
 	EXE_EXT := .exe
-	# MinGW-specific flags for cross-compilation compatibility
-	CFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
-	CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+	# MinGW-specific flags are already set above
 	LDFLAGS += -static-libgcc -static-libstdc++
 	# Ensure proper linking of C++ standard library components
 	LDFLAGS += -lstdc++ -lm
+	WINDOWS_FLAGS_SET := 1
+	export WINDOWS_FLAGS_SET
 else
 	OBJ_EXT := .o
 	EXE_EXT :=
@@ -241,6 +254,14 @@ $(info )
 
 # Use this if you want to set the default behavior
 
+# Debug output for Windows builds
+ifdef IS_WINDOWS
+$(info I Windows build detected - forcing old C++ ABI)
+$(info I Final CFLAGS: $(CFLAGS))
+$(info I Final CXXFLAGS: $(CXXFLAGS))
+$(info I Final CMAKE_ARGS: $(CMAKE_ARGS))
+endif
+
 llama.cpp/grammar-parser.o: llama.cpp/ggml.o
 ifdef IS_WINDOWS
 	cd build && (cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.obj ../llama.cpp/grammar-parser.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o)
@@ -258,7 +279,19 @@ endif
 llama.cpp/ggml.o: prepare
 	mkdir -p build
 ifdef IS_WINDOWS
-	cd build && CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && (cp -rf CMakeFiles/ggml.dir/ggml.c.obj ../llama.cpp/ggml.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o)
+	# Force old ABI for Windows builds
+	# Export flags to ensure CMake picks them up
+	cd build && \
+		export CFLAGS="$(CFLAGS)" && \
+		export CXXFLAGS="$(CXXFLAGS)" && \
+		CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp \
+			-DCMAKE_C_FLAGS="$(CFLAGS)" \
+			-DCMAKE_CXX_FLAGS="$(CXXFLAGS)" \
+			-DCMAKE_C_FLAGS_RELEASE="$(CFLAGS)" \
+			-DCMAKE_CXX_FLAGS_RELEASE="$(CXXFLAGS)" \
+			$(CMAKE_ARGS) && \
+		VERBOSE=1 cmake --build . --config Release && \
+		(cp -rf CMakeFiles/ggml.dir/ggml.c.obj ../llama.cpp/ggml.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o)
 else
 	cd build && CC="$(CC)" CXX="$(CXX)" cmake ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
 endif
@@ -294,9 +327,15 @@ else
 endif
 
 binding.o: prepare
+ifdef IS_WINDOWS
+	@echo "Compiling binding.cpp with: $(CXX) $(CXXFLAGS)"
+endif
 	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c
 
 llama_data_source.o: prepare
+ifdef IS_WINDOWS
+	@echo "Compiling llama_data_source.cpp with: $(CXX) $(CXXFLAGS)"
+endif
 	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common llama_data_source.cpp -o llama_data_source.o -c
 
 ## https://github.com/ggerganov/llama.cpp/pull/1902

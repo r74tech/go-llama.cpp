@@ -71,13 +71,41 @@ if [ -f "libbinding.a" ]; then
     echo -e "${GREEN}Library information:${NC}"
     file libbinding.a
     
-    # List symbols to verify codecvt symbols are included
-    echo -e "${GREEN}Checking for codecvt symbols:${NC}"
+    # Check for C++11 ABI symbols (should NOT be present with our flags)
+    echo -e "${GREEN}Checking for C++11 ABI symbols (should be empty):${NC}"
     if [ $IS_CROSS_COMPILE -eq 1 ]; then
-        x86_64-w64-mingw32-nm libbinding.a | grep -i codecvt || echo "No codecvt symbols found (this might be normal if statically linked)"
+        x86_64-w64-mingw32-nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found (good!)"
     else
-        nm libbinding.a | grep -i codecvt || echo "No codecvt symbols found (this might be normal if statically linked)"
+        nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -10 || echo "No C++11 ABI symbols found (good!)"
     fi
+    
+    # Check for llama symbols
+    echo -e "${GREEN}Checking for key llama symbols:${NC}"
+    if [ $IS_CROSS_COMPILE -eq 1 ]; then
+        x86_64-w64-mingw32-nm libbinding.a 2>/dev/null | grep -E "llama_tokenize|llama_token_to_piece" | head -10
+    else
+        nm libbinding.a 2>/dev/null | grep -E "llama_tokenize|llama_token_to_piece" | head -10
+    fi
+    
+    # Extract and check individual object files
+    echo -e "${GREEN}Extracting and checking object files:${NC}"
+    mkdir -p temp_check
+    cd temp_check
+    if [ $IS_CROSS_COMPILE -eq 1 ]; then
+        x86_64-w64-mingw32-ar x ../libbinding.a
+        echo "Checking binding.o for ABI symbols:"
+        x86_64-w64-mingw32-nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o (good!)"
+        echo "Checking llama.o for ABI symbols:"
+        x86_64-w64-mingw32-nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o (good!)"
+    else
+        ar x ../libbinding.a
+        echo "Checking binding.o for ABI symbols:"
+        nm binding.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in binding.o (good!)"
+        echo "Checking llama.o for ABI symbols:"
+        nm llama.o 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -5 || echo "No C++11 ABI in llama.o (good!)"
+    fi
+    cd ..
+    rm -rf temp_check
     
     echo -e "${GREEN}Library size:${NC}"
     ls -lh libbinding.a
