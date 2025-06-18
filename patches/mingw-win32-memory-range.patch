@@ -1,0 +1,19 @@
+diff --git a/llama.cpp b/llama.cpp
+index ac435761..abcdef12 100644
+--- a/llama.cpp
++++ b/llama.cpp
+@@ -49,6 +49,14 @@
+     #include <stdio.h> // for _fseeki64
+ #endif
+ 
++#if defined(_WIN32) && defined(__MINGW32__)
++    // MinGW doesn't define these structures in older versions
++    typedef struct _WIN32_MEMORY_RANGE_ENTRY {
++        PVOID  VirtualAddress;
++        SIZE_T NumberOfBytes;
++    } WIN32_MEMORY_RANGE_ENTRY, *PWIN32_MEMORY_RANGE_ENTRY;
++#endif
++
+ #include <algorithm>
+ #include <array>
+ #include <cassert>
