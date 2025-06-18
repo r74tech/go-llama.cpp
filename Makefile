@@ -89,10 +89,14 @@ CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
 ifdef IS_WINDOWS
 	OBJ_EXT := .o
 	EXE_EXT := .exe
-	# MinGW-specific flags are already set above
+	# MinGW-specific flags
 	LDFLAGS += -static-libgcc -static-libstdc++
 	# Ensure proper linking of C++ standard library components
 	LDFLAGS += -lstdc++ -lm
+	# Additional flags to handle codecvt issues
+	LDFLAGS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive
+	# Define to avoid codecvt usage in MinGW
+	CXXFLAGS += -D__MINGW32__ -D_WIN32_WINNT=0x0601
 	WINDOWS_FLAGS_SET := 1
 	export WINDOWS_FLAGS_SET
 else
@@ -341,6 +345,9 @@ endif
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
 	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
+ifdef IS_WINDOWS
+	cd llama.cpp && patch -p1 < ../patches/mingw-codecvt-fix.patch
+endif
 	touch $@
 
 libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
