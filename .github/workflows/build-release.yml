@@ -135,21 +135,21 @@ jobs:
         # Check ABI symbols in Windows builds
         if [ "${{ matrix.os }}" == "windows-latest" ]; then
           echo "=== Checking ABI symbols in libbinding.a ==="
-          nm libbinding.a | grep -E "(cxx11|__cxx11)" | head -20 || echo "No C++11 ABI symbols found"
+          nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -20 || echo "No C++11 ABI symbols found"
           echo "=== Checking for llama symbols ==="
-          nm libbinding.a | grep -E "llama_tokenize|llama_token_to_piece" | head -10
+          nm libbinding.a 2>/dev/null | grep -E "llama_tokenize|llama_token_to_piece" | head -10 || true
           echo "=== Detailed symbol check ==="
           # Check for std::string related symbols
-          nm libbinding.a | grep -E "basic_string" | head -10
+          nm libbinding.a 2>/dev/null | grep -E "basic_string" | head -10 || true
           # Check specific object files
           echo "=== Extracting and checking specific object files ==="
           mkdir -p temp_check
           cd temp_check
           ar x ../libbinding.a
           echo "Checking common.o symbols:"
-          nm common.o | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No problematic symbols in common.o"
+          nm common.o 2>/dev/null | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No symbols found in common.o"
           echo "Checking binding.o symbols:"
-          nm binding.o | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No problematic symbols in binding.o"
+          nm binding.o 2>/dev/null | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No symbols found in binding.o"
           cd ..
           rm -rf temp_check
         fi
