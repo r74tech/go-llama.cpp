@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/go-skynet/go-llama.cpp"
+	"github.com/r74tech/go-llama.cpp"
 )
 
 // Embed a model file into the binary
+//
 //go:embed model.gguf
 var modelData []byte
 
@@ -23,12 +24,12 @@ func main() {
 
 	// Test the model
 	fmt.Println("Model loaded successfully from memory!")
-	
+
 	// Try to predict something
 	response, err := model.Predict("Hello, ", llama.SetTemperature(0.8))
 	if err != nil {
 		log.Fatalf("Failed to predict: %v", err)
 	}
-	
+
 	fmt.Printf("Response: %s\n", response)
 }

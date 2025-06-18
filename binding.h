@@ -6,6 +6,14 @@ extern "C" {
 
 #include <stdbool.h>
 
+// Forward declarations
+struct llama_context;
+struct llama_model;
+
+// llama_binding_state is already defined in common.h via the patch
+// We only need a forward declaration here
+struct llama_binding_state;
+
 // Forward declaration for llama_load_model_from_buffer
 // NOTE: Currently not implemented in llama.cpp, using temporary file workaround
 // struct llama_model;

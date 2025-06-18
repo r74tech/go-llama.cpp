@@ -21,3 +21,16 @@ ggllm-test-model.bin
 
 # model files
 **/*.gguf
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Linux
+.directory
+
+# build cache
+*.o
+*.log
