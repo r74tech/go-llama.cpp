@@ -1,0 +1,43 @@
+diff --git a/common/common.cpp b/common/common.cpp
+index 2597ba06..283110e0 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -27,7 +27,9 @@
+ #ifndef NOMINMAX
+ #   define NOMINMAX
+ #endif
++#ifndef __MINGW32__
+ #include <codecvt>
++#endif
+ #include <locale>
+ #include <windows.h>
+ #include <fcntl.h>
+@@ -986,8 +988,15 @@ llama_token llama_sample_token(
+ // returns true if successful, false otherwise
+ bool create_directory_with_parents(const std::string & path) {
+ #ifdef _WIN32
++#ifdef __MINGW32__
++    // MinGW doesn't have proper codecvt support, use MultiByteToWideChar instead
++    int size_needed = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.length(), NULL, 0);
++    std::wstring wpath(size_needed, 0);
++    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.length(), &wpath[0], size_needed);
++#else
+     std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+     std::wstring wpath = converter.from_bytes(path);
++#endif
+ 
+     // if the path already exists, check whether it's a directory
+     const DWORD attributes = GetFileAttributesW(wpath.c_str());
+@@ -1020,7 +1029,11 @@ bool create_directory_with_parents(const std::string & path) {
+         pos_slash += 1;
+     }
+ 
++#ifdef __MINGW32__
++    return CreateDirectoryW(wpath.c_str(), NULL) || (GetLastError() == ERROR_ALREADY_EXISTS);
++#else
+     return true;
++#endif // __MINGW32__
+ #else
+     // if the path already exists, check whether it's a directory
+     struct stat info;
+\ No newline at end of file

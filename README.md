@@ -1,6 +1,8 @@
-# [![Go Reference](https://pkg.go.dev/badge/github.com/go-skynet/go-llama.cpp.svg)](https://pkg.go.dev/github.com/go-skynet/go-llama.cpp) go-llama.cpp
+# [![Go Reference](https://pkg.go.dev/badge/github.com/go-skynet/go-llama.cpp.svg)](https://pkg.go.dev/github.com/go-skynet/go-llama.cpp) go-llama.cpp (Fork with Memory Buffer Support)
 
 [LLama.cpp](https://github.com/ggerganov/llama.cpp) golang bindings.
+
+**This is a fork of [go-skynet/go-llama.cpp](https://github.com/go-skynet/go-llama.cpp) that adds support for loading models from memory buffers.**
 
 The go-llama.cpp bindings are high level, as such most of the work is kept into the C/C++ code to avoid any extra computational cost, be more performant and lastly ease out maintenance, while keeping the usage as simple as possible.
 
@@ -13,6 +15,78 @@ If you are looking for an high-level OpenAI compatible API, check out [here](htt
 Since https://github.com/go-skynet/go-llama.cpp/pull/180 is merged, now go-llama.cpp is not anymore compatible with `ggml` format, but it works ONLY with the new `gguf` file format. See also the upstream PR: https://github.com/ggerganov/llama.cpp/pull/2398.
 
 If you need to use the `ggml` format, use the https://github.com/go-skynet/go-llama.cpp/releases/tag/pre-gguf tag.
+
+## Fork Features
+
+### Memory Buffer Loading
+
+This fork adds the ability to load GGUF models directly from memory buffers, eliminating the need for temporary files. This is useful for:
+
+- Loading models from embedded resources
+- Working with models stored in databases or object storage
+- Reducing disk I/O operations
+- Improving security by keeping models in memory
+
+### Example Usage
+
+<details>
+<summary><b>Loading from a byte slice</b></summary>
+
+```go
+// Load model from byte slice
+modelData, err := ioutil.ReadFile("model.gguf")
+if err != nil {
+    panic(err)
+}
+
+model, err := llama.NewFromMemory(modelData, 
+    llama.EnableF16Memory,
+    llama.SetContext(128),
+    llama.EnableEmbeddings,
+    llama.SetGPULayers(0))
+if err != nil {
+    panic(err)
+}
+defer model.Free()
+```
+</details>
+
+<details>
+<summary><b>Loading from embedded resources</b></summary>
+
+```go
+package main
+
+import (
+    _ "embed"
+    llama "github.com/go-skynet/go-llama.cpp"
+)
+
+// Embed the model file at compile time
+//go:embed models/model.gguf
+var embeddedModel []byte
+
+func main() {
+    // Load model from embedded bytes
+    model, err := llama.NewFromMemory(embeddedModel,
+        llama.EnableF16Memory,
+        llama.SetContext(128),
+        llama.EnableEmbeddings,
+        llama.SetGPULayers(0))
+    if err != nil {
+        panic(err)
+    }
+    defer model.Free()
+    
+    // Use the model for inference
+    _, err = model.Predict("Hello, world!", 
+        llama.SetTokens(128),
+        llama.SetThreads(4))
+}
+```
+</details>
+
+See the [examples/modelembed](examples/modelembed/main.go) directory for a complete working example with interactive mode.
 
 ## Usage
 

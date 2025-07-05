@@ -2,14 +2,17 @@ package llama
 
 // #cgo CXXFLAGS: -I${SRCDIR}/llama.cpp/common -I${SRCDIR}/llama.cpp
 // #cgo LDFLAGS: -L${SRCDIR}/ -lbinding -lm -lstdc++
-// #cgo darwin LDFLAGS: -framework Accelerate
+// #cgo darwin LDFLAGS: -framework Accelerate -framework Foundation -framework Metal -framework MetalKit
 // #cgo darwin CXXFLAGS: -std=c++11
+// #cgo windows LDFLAGS: -static -static-libgcc -static-libstdc++ -lpthread
 // #include "binding.h"
 // #include <stdlib.h>
+// #include <string.h>
 import "C"
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -19,6 +22,12 @@ type LLama struct {
 	state       unsafe.Pointer
 	embeddings  bool
 	contextSize int
+	// Keep a reference to the model data to prevent GC
+	modelData []byte
+	// C memory pointer for model data (needs to be freed)
+	cModelData unsafe.Pointer
+	// Mutex to protect concurrent predict calls
+	predictMu sync.Mutex
 }
 
 func New(model string, opts ...ModelOption) (*LLama, error) {
@@ -45,15 +54,76 @@ func New(model string, opts ...ModelOption) (*LLama, error) {
 	)
 
 	if result == nil {
-		return nil, fmt.Errorf("failed loading model")
+		return nil, fmt.Errorf("failed loading model from %s - model file may not exist or is invalid", model)
 	}
 
 	ll := &LLama{state: result, contextSize: mo.ContextSize, embeddings: mo.Embeddings}
 	return ll, nil
 }
 
+func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
+	mo := NewModelOptions(opts...)
+	loraBase := C.CString(mo.LoraBase)
+	defer C.free(unsafe.Pointer(loraBase))
+	loraAdapter := C.CString(mo.LoraAdapter)
+	defer C.free(unsafe.Pointer(loraAdapter))
+
+	MulMatQ := true
+
+	if mo.MulMatQ != nil {
+		MulMatQ = *mo.MulMatQ
+	}
+
+	// Make a copy of the model data to ensure it's not moved by GC
+	// This copy will be owned by the LLama struct
+	modelDataCopy := make([]byte, len(modelData))
+	copy(modelDataCopy, modelData)
+
+	// Allocate C memory for the model data to ensure it's not moved by Go's GC
+	dataSize := C.size_t(len(modelDataCopy))
+	cDataPtr := C.malloc(dataSize)
+	if cDataPtr == nil {
+		return nil, fmt.Errorf("failed to allocate memory for model data")
+	}
+
+	// Copy the data to C memory
+	C.memcpy(cDataPtr, unsafe.Pointer(&modelDataCopy[0]), dataSize)
+
+	// Debug: Print memory info
+	if os.Getenv("LLAMA_DEBUG") != "" {
+		fmt.Printf("NewFromMemory: allocated %d bytes at %p\n", dataSize, cDataPtr)
+	}
+
+	result := C.load_model_from_memory(cDataPtr, dataSize,
+		C.int(mo.ContextSize), C.int(mo.Seed),
+		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
+		C.int(mo.NGPULayers), C.int(mo.NBatch), C.CString(mo.MainGPU), C.CString(mo.TensorSplit), C.bool(mo.NUMA),
+		C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
+		C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
+	)
+
+	if result == nil {
+		C.free(cDataPtr)
+		return nil, fmt.Errorf("failed loading model from memory")
+	}
+
+	ll := &LLama{
+		state:       result,
+		contextSize: mo.ContextSize,
+		embeddings:  mo.Embeddings,
+		modelData:   modelDataCopy, // Keep a reference to prevent GC
+		cModelData:  cDataPtr,      // Store C pointer to free later
+	}
+	return ll, nil
+}
+
 func (l *LLama) Free() {
 	C.llama_binding_free_model(l.state)
+	// Free the C-allocated model data if it exists
+	if l.cModelData != nil {
+		C.free(l.cModelData)
+		l.cModelData = nil
+	}
 }
 
 func (l *LLama) LoadState(state string) error {
@@ -89,6 +159,10 @@ func (l *LLama) TokenEmbeddings(tokens []int, opts ...PredictOption) ([]float32,
 	if !l.embeddings {
 		return []float32{}, fmt.Errorf("model loaded without embeddings")
 	}
+
+	// Protect against concurrent token embeddings calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
 
 	po := NewPredictOptions(opts...)
 
@@ -138,6 +212,10 @@ func (l *LLama) Embeddings(text string, opts ...PredictOption) ([]float32, error
 		return []float32{}, fmt.Errorf("model loaded without embeddings")
 	}
 
+	// Protect against concurrent embeddings calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+
 	po := NewPredictOptions(opts...)
 
 	input := C.CString(text)
@@ -177,6 +255,10 @@ func (l *LLama) Embeddings(text string, opts ...PredictOption) ([]float32, error
 }
 
 func (l *LLama) Eval(text string, opts ...PredictOption) error {
+	// Protect against concurrent eval calls
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+
 	po := NewPredictOptions(opts...)
 
 	input := C.CString(text)
@@ -217,6 +299,14 @@ func (l *LLama) Eval(text string, opts ...PredictOption) error {
 }
 
 func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOption) (string, error) {
+	// Protect against concurrent predictions
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+	if ll != l {
+		ll.predictMu.Lock()
+		defer ll.predictMu.Unlock()
+	}
+
 	po := NewPredictOptions(opts...)
 
 	if po.TokenCallback != nil {
@@ -251,7 +341,7 @@ func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOptio
 		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), C.CString(po.NegativePrompt),
 		C.int(po.NDraft),
 	)
-	ret := C.speculative_sampling(params, l.state, ll.state, (*C.char)(unsafe.Pointer(&out[0])), C.bool(po.DebugMode))
+	ret := C.speculative_sampling(params, l.state, ll.state, (*C.char)(unsafe.Pointer(&out[0])), C.size_t(len(out)), C.bool(po.DebugMode))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}
@@ -275,6 +365,10 @@ func (l *LLama) SpeculativeSampling(ll *LLama, text string, opts ...PredictOptio
 }
 
 func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
+	// Protect against concurrent predictions
+	l.predictMu.Lock()
+	defer l.predictMu.Unlock()
+
 	po := NewPredictOptions(opts...)
 
 	if po.TokenCallback != nil {
@@ -282,10 +376,20 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	}
 
 	input := C.CString(text)
+	defer C.free(unsafe.Pointer(input))
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
 	}
-	out := make([]byte, po.Tokens)
+
+	// Allocate C memory for output to avoid Go GC issues
+	outSize := C.size_t(po.Tokens)
+	outPtr := C.malloc(outSize)
+	if outPtr == nil {
+		return "", fmt.Errorf("failed to allocate memory for output")
+	}
+	defer C.free(outPtr)
+	// Clear the allocated memory
+	C.memset(outPtr, 0, outSize)
 
 	reverseCount := len(po.StopPrompts)
 	reversePrompt := make([]*C.char, reverseCount)
@@ -293,27 +397,44 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 	for i, s := range po.StopPrompts {
 		cs := C.CString(s)
 		reversePrompt[i] = cs
+		defer C.free(unsafe.Pointer(cs))
 		pass = &reversePrompt[0]
 	}
+
+	// Allocate C strings and ensure they are freed
+	logitBias := C.CString(po.LogitBias)
+	defer C.free(unsafe.Pointer(logitBias))
+	pathPromptCache := C.CString(po.PathPromptCache)
+	defer C.free(unsafe.Pointer(pathPromptCache))
+	mainGPU := C.CString(po.MainGPU)
+	defer C.free(unsafe.Pointer(mainGPU))
+	tensorSplit := C.CString(po.TensorSplit)
+	defer C.free(unsafe.Pointer(tensorSplit))
+	grammar := C.CString(po.Grammar)
+	defer C.free(unsafe.Pointer(grammar))
+	negativePrompt := C.CString(po.NegativePrompt)
+	defer C.free(unsafe.Pointer(negativePrompt))
 
 	params := C.llama_allocate_params(input, C.int(po.Seed), C.int(po.Threads), C.int(po.Tokens), C.int(po.TopK),
 		C.float(po.TopP), C.float(po.Temperature), C.float(po.Penalty), C.int(po.Repeat),
 		C.bool(po.IgnoreEOS), C.bool(po.F16KV),
 		C.int(po.Batch), C.int(po.NKeep), pass, C.int(reverseCount),
 		C.float(po.TailFreeSamplingZ), C.float(po.TypicalP), C.float(po.FrequencyPenalty), C.float(po.PresencePenalty),
-		C.int(po.Mirostat), C.float(po.MirostatETA), C.float(po.MirostatTAU), C.bool(po.PenalizeNL), C.CString(po.LogitBias),
-		C.CString(po.PathPromptCache), C.bool(po.PromptCacheAll), C.bool(po.MLock), C.bool(po.MMap),
-		C.CString(po.MainGPU), C.CString(po.TensorSplit),
+		C.int(po.Mirostat), C.float(po.MirostatETA), C.float(po.MirostatTAU), C.bool(po.PenalizeNL), logitBias,
+		pathPromptCache, C.bool(po.PromptCacheAll), C.bool(po.MLock), C.bool(po.MMap),
+		mainGPU, tensorSplit,
 		C.bool(po.PromptCacheRO),
-		C.CString(po.Grammar),
-		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), C.CString(po.NegativePrompt),
+		grammar,
+		C.float(po.RopeFreqBase), C.float(po.RopeFreqScale), C.float(po.NegativePromptScale), negativePrompt,
 		C.int(po.NDraft),
 	)
-	ret := C.llama_predict(params, l.state, (*C.char)(unsafe.Pointer(&out[0])), C.bool(po.DebugMode))
+	defer C.llama_free_params(params)
+
+	ret := C.llama_predict(params, l.state, (*C.char)(outPtr), outSize, C.bool(po.DebugMode))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}
-	res := C.GoString((*C.char)(unsafe.Pointer(&out[0])))
+	res := C.GoString((*C.char)(outPtr))
 
 	res = strings.TrimPrefix(res, " ")
 	res = strings.TrimPrefix(res, text)
@@ -323,11 +444,12 @@ func (l *LLama) Predict(text string, opts ...PredictOption) (string, error) {
 		res = strings.TrimRight(res, s)
 	}
 
-	C.llama_free_params(params)
-
 	if po.TokenCallback != nil {
 		setCallback(l.state, nil)
 	}
+
+	// Ensure the LLama struct doesn't get garbage collected while C code is using it
+	runtime.KeepAlive(l)
 
 	return res, nil
 }

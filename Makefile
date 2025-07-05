@@ -15,6 +15,30 @@ ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
 
+# Detect Windows (including MinGW/MSYS) early so we can use it for compiler defaults
+ifneq ($(findstring _NT,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+ifneq ($(findstring MINGW,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+ifneq ($(findstring MSYS,$(UNAME_S)),)
+	IS_WINDOWS := 1
+endif
+
+# Set default compilers if not defined
+ifndef CC
+	ifdef IS_WINDOWS
+		CC = gcc
+	else
+		CC = cc
+	endif
+endif
+
+ifndef CXX
+	CXX = g++
+endif
+
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
 
@@ -41,12 +65,49 @@ CFLAGS   = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC
 CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC
 LDFLAGS  =
 
+# Ensure consistent ABI across all object files
+ifdef IS_WINDOWS
+	# Use standard flags for Windows builds
+	CFLAGS = -I./llama.cpp -I. -O3 -DNDEBUG -std=c11 -fPIC
+	CXXFLAGS = -I./llama.cpp -I. -I./llama.cpp/common -I./common -O3 -DNDEBUG -std=c++11 -fPIC
+	# MinGW requires static linking of libstdc++ to avoid symbol issues
+	LDFLAGS = -static-libgcc -static-libstdc++ -Wl,--whole-archive -lpthread -Wl,--no-whole-archive
+	# Add to CMAKE_ARGS to ensure CMake uses the same flags
+	# Also set CMAKE_CXX_STANDARD to force C++11 standard
+	CMAKE_ARGS += -DCMAKE_C_FLAGS="-O3 -DNDEBUG -std=c11 -fPIC" \
+	              -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -std=c++11 -fPIC" \
+	              -DCMAKE_CXX_STANDARD=11 \
+	              -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+	              -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
+	              -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+endif
+
 # warnings
 CFLAGS   += -Wall -Wextra -Wpedantic -Wcast-qual -Wdouble-promotion -Wshadow -Wstrict-prototypes -Wpointer-arith -Wno-unused-function
 CXXFLAGS += -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function
 
 # OS specific
 # TODO: support Windows
+
+# Set object file extension based on platform
+ifdef IS_WINDOWS
+	OBJ_EXT := .o
+	EXE_EXT := .exe
+	# MinGW-specific flags
+	LDFLAGS += -static-libgcc -static-libstdc++
+	# Ensure proper linking of C++ standard library components
+	LDFLAGS += -lstdc++ -lm
+	# Additional flags to handle codecvt issues
+	LDFLAGS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive
+	# Define to avoid codecvt usage in MinGW
+	CXXFLAGS += -D__MINGW32__ -D_WIN32_WINNT=0x0601
+	WINDOWS_FLAGS_SET := 1
+	export WINDOWS_FLAGS_SET
+else
+	OBJ_EXT := .o
+	EXE_EXT :=
+endif
+
 ifeq ($(UNAME_S),Linux)
 	CFLAGS   += -pthread
 	CXXFLAGS += -pthread
@@ -201,15 +262,46 @@ $(info )
 
 # Use this if you want to set the default behavior
 
+# Debug output for Windows builds
+ifdef IS_WINDOWS
+$(info I Windows build detected)
+$(info I Final CFLAGS: $(CFLAGS))
+$(info I Final CXXFLAGS: $(CXXFLAGS))
+$(info I Final CMAKE_ARGS: $(CMAKE_ARGS))
+endif
+
 llama.cpp/grammar-parser.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.obj ../llama.cpp/grammar-parser.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o)
+else
 	cd build && cp -rf common/CMakeFiles/common.dir/grammar-parser.cpp.o ../llama.cpp/grammar-parser.o
+endif
 
 llama.cpp/ggml-alloc.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.obj ../llama.cpp/ggml-alloc.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.o ../llama.cpp/ggml-alloc.o)
+else
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-alloc.c.o ../llama.cpp/ggml-alloc.o
+endif
 
 llama.cpp/ggml.o: prepare
 	mkdir -p build
+ifdef IS_WINDOWS
+	# Export flags to ensure CMake picks them up
+	cd build && \
+		export CFLAGS="$(CFLAGS)" && \
+		export CXXFLAGS="$(CXXFLAGS)" && \
+		CC="$(CC)" CXX="$(CXX)" cmake -G "MinGW Makefiles" ../llama.cpp \
+			-DCMAKE_C_FLAGS="$(CFLAGS)" \
+			-DCMAKE_CXX_FLAGS="$(CXXFLAGS)" \
+			-DCMAKE_C_FLAGS_RELEASE="$(CFLAGS)" \
+			-DCMAKE_CXX_FLAGS_RELEASE="$(CXXFLAGS)" \
+			$(CMAKE_ARGS) && \
+		VERBOSE=1 cmake --build . --config Release && \
+		(cp -rf CMakeFiles/ggml.dir/ggml.c.obj ../llama.cpp/ggml.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o)
+else
 	cd build && CC="$(CC)" CXX="$(CXX)" cmake ../llama.cpp $(CMAKE_ARGS) && VERBOSE=1 cmake --build . --config Release && cp -rf CMakeFiles/ggml.dir/ggml.c.o ../llama.cpp/ggml.o
+endif
 
 llama.cpp/ggml-cuda.o: llama.cpp/ggml.o
 	cd build && cp -rf "$(GGML_CUDA_OBJ_PATH)" ../llama.cpp/ggml-cuda.o
@@ -221,24 +313,61 @@ llama.cpp/ggml-metal.o: llama.cpp/ggml.o
 	cd build && cp -rf CMakeFiles/ggml.dir/ggml-metal.m.o ../llama.cpp/ggml-metal.o
 
 llama.cpp/k_quants.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/ggml.dir/k_quants.c.obj ../llama.cpp/k_quants.o 2>/dev/null || cp -rf CMakeFiles/ggml.dir/k_quants.c.o ../llama.cpp/k_quants.o)
+else
 	cd build && cp -rf CMakeFiles/ggml.dir/k_quants.c.o ../llama.cpp/k_quants.o
+endif
 
 llama.cpp/llama.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf CMakeFiles/llama.dir/llama.cpp.obj ../llama.cpp/llama.o 2>/dev/null || cp -rf CMakeFiles/llama.dir/llama.cpp.o ../llama.cpp/llama.o)
+else
 	cd build && cp -rf CMakeFiles/llama.dir/llama.cpp.o ../llama.cpp/llama.o
+endif
 
 llama.cpp/common.o: llama.cpp/ggml.o
+ifdef IS_WINDOWS
+	cd build && (cp -rf common/CMakeFiles/common.dir/common.cpp.obj ../llama.cpp/common.o 2>/dev/null || cp -rf common/CMakeFiles/common.dir/common.cpp.o ../llama.cpp/common.o)
+else
 	cd build && cp -rf common/CMakeFiles/common.dir/common.cpp.o ../llama.cpp/common.o
+endif
 
 binding.o: prepare
-	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c $(LDFLAGS)
+ifdef IS_WINDOWS
+	@echo "Compiling binding.cpp with: $(CXX) $(CXXFLAGS)"
+endif
+	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common binding.cpp -o binding.o -c
+
+llama_data_source.o: prepare
+ifdef IS_WINDOWS
+	@echo "Compiling llama_data_source.cpp with: $(CXX) $(CXXFLAGS)"
+endif
+	$(CXX) $(CXXFLAGS) -I./llama.cpp -I./llama.cpp/common llama_data_source.cpp -o llama_data_source.o -c
 
 ## https://github.com/ggerganov/llama.cpp/pull/1902
 prepare:
 	cd llama.cpp && patch -p1 < ../patches/1902-cuda.patch
+	cd llama.cpp && patch -p1 < ../patches/memory-loading.patch
+ifdef IS_WINDOWS
+	cd llama.cpp && patch -p1 < ../patches/mingw-codecvt-fix.patch
+	cd llama.cpp && patch -p1 < ../patches/mingw-win32-memory-range.patch
+	cd llama.cpp && patch -p1 < ../patches/mingw-seekp-seekg-fix.patch
+endif
 	touch $@
 
-libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o $(EXTRA_TARGETS)
-	ar src libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o $(EXTRA_TARGETS)
+libbinding.a: llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
+ifdef IS_WINDOWS
+	# Use x86_64-w64-mingw32-ar if available for better cross-compilation compatibility
+	@if command -v x86_64-w64-mingw32-ar >/dev/null 2>&1; then \
+		echo "Using x86_64-w64-mingw32-ar"; \
+		x86_64-w64-mingw32-ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS); \
+	else \
+		ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS); \
+	fi
+else
+	ar rcs libbinding.a llama.cpp/ggml.o llama.cpp/k_quants.o llama.cpp/ggml-alloc.o llama.cpp/common.o llama.cpp/grammar-parser.o llama.cpp/llama.o binding.o llama_data_source.o $(EXTRA_TARGETS)
+endif
 
 clean:
 	rm -rf *.o
@@ -246,8 +375,15 @@ clean:
 	$(MAKE) -C llama.cpp clean
 	rm -rf build
 
+# Use a smaller model for faster testing (TinyLlama 1.1B instead of CodeLlama 7B)
 ggllm-test-model.bin:
-	wget -q https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf -O ggllm-test-model.bin
+ifdef IS_WINDOWS
+	@echo Downloading test model...
+	@curl -L --progress-bar -o ggllm-test-model.bin https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf || \
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf' -OutFile 'ggllm-test-model.bin'"
+else
+	wget -q https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf -O ggllm-test-model.bin
+endif
 
 test: ggllm-test-model.bin libbinding.a
-	C_INCLUDE_PATH=${INCLUDE_PATH} CGO_LDFLAGS=${CGO_LDFLAGS} LIBRARY_PATH=${LIBRARY_PATH} TEST_MODEL=ggllm-test-model.bin go run github.com/onsi/ginkgo/v2/ginkgo --label-filter="$(TEST_LABEL)" --flake-attempts 5 -v -r ./...
+	C_INCLUDE_PATH=${INCLUDE_PATH} CGO_LDFLAGS=${CGO_LDFLAGS} LIBRARY_PATH=${LIBRARY_PATH} TEST_MODEL=ggllm-test-model.bin go run github.com/onsi/ginkgo/v2/ginkgo --label-filter="$(TEST_LABEL)" --flake-attempts 5 --skip-package=examples -v -r ./...

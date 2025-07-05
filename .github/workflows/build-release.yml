@@ -1,0 +1,346 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} ${{ matrix.build_type == 'metal' && '(Metal)' || '' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+            build_type: default
+          - os: macos-13  # Intel Mac
+            platform: darwin
+            arch: amd64
+            build_type: default
+          - os: macos-13  # Intel Mac with Metal
+            platform: darwin
+            arch: amd64
+            build_type: metal
+          - os: macos-14  # Apple Silicon Mac
+            platform: darwin
+            arch: arm64
+            build_type: default
+          - os: macos-14  # Apple Silicon Mac with Metal
+            platform: darwin
+            arch: arm64
+            build_type: metal
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+            build_type: default
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up build environment (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    - name: Set up build environment (macOS)
+      if: startsWith(matrix.os, 'macos')
+      run: |
+        brew install cmake
+
+    - name: Install MinGW-w64 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        # Install MinGW-w64 for better cross-compilation compatibility
+        choco install mingw -y
+        echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
+        # Verify installation
+        echo "MinGW-w64 version:"
+        gcc --version
+        g++ --version
+
+    - name: Get llama.cpp commit
+      id: get_commit
+      shell: bash
+      run: |
+        LLAMA_COMMIT=$(git submodule status llama.cpp | awk '{print $1}')
+        echo "llama_commit=${LLAMA_COMMIT}" >> $GITHUB_OUTPUT
+        echo "Llama.cpp commit: ${LLAMA_COMMIT}"
+
+    - name: Build library
+      shell: bash
+      env:
+        WINDOWS_FLAGS_SET: 1
+      run: |
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          export PATH="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin:$PATH"
+          export CC=gcc
+          export CXX=g++
+          # Set MinGW-specific flags for cross-compilation compatibility
+          export CFLAGS="-O3 -DNDEBUG -std=c11 -fPIC"
+          export CXXFLAGS="-O3 -DNDEBUG -std=c++11 -fPIC"
+          export LDFLAGS="-static-libgcc -static-libstdc++ -lm"
+          # Ensure we're using static runtime libraries
+          export CGO_LDFLAGS="-static-libgcc -static-libstdc++"
+          # Force environment for make
+          export WINDOWS_FLAGS_SET=1
+          echo "Build configuration:"
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+          echo "CFLAGS=$CFLAGS"
+          echo "CXXFLAGS=$CXXFLAGS"
+          echo "LDFLAGS=$LDFLAGS"
+          echo "WINDOWS_FLAGS_SET=$WINDOWS_FLAGS_SET"
+          # Check MinGW version and default ABI
+          echo "MinGW C++ compiler details:"
+          g++ -v 2>&1 | grep -E "(version|Target|Thread model|gcc version)"
+          echo "Default ABI check:"
+          echo '#include <iostream>' > test_abi.cpp
+          echo 'int main() { std::cout << _GLIBCXX_USE_CXX11_ABI << std::endl; return 0; }' >> test_abi.cpp
+          g++ -o test_abi test_abi.cpp && ./test_abi || echo "ABI test failed"
+          rm -f test_abi.cpp test_abi test_abi.exe
+        fi
+        # Clean everything including CMake cache
+        make clean
+        rm -rf build
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          BUILD_TYPE=metal CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" make libbinding.a VERBOSE=1
+        else
+          CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" make libbinding.a VERBOSE=1
+        fi
+        
+        # Check what was actually built
+        echo "=== Checking for built libraries on ${{ matrix.os }} ==="
+        echo "Current directory:"
+        pwd
+        echo "All .a files:"
+        find . -name "*.a" -type f | head -20
+        echo "All .lib files:"
+        find . -name "*.lib" -type f | head -20
+        echo "libbinding files:"
+        ls -la libbinding* 2>/dev/null || echo "No libbinding files found"
+        echo "llama.cpp directory:"
+        ls -la llama.cpp/*.o 2>/dev/null | head -10 || echo "No .o files in llama.cpp"
+        
+        # Check ABI symbols in Windows builds
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          echo "=== Checking ABI symbols in libbinding.a ==="
+          nm libbinding.a 2>/dev/null | grep -E "(cxx11|__cxx11)" | head -20 || echo "No C++11 ABI symbols found"
+          echo "=== Checking for llama symbols ==="
+          nm libbinding.a 2>/dev/null | grep -E "llama_tokenize|llama_token_to_piece" | head -10 || true
+          echo "=== Detailed symbol check ==="
+          # Check for std::string related symbols
+          nm libbinding.a 2>/dev/null | grep -E "basic_string" | head -10 || true
+          # Check specific object files
+          echo "=== Extracting and checking specific object files ==="
+          mkdir -p temp_check
+          cd temp_check
+          ar x ../libbinding.a
+          echo "Checking common.o symbols:"
+          nm common.o 2>/dev/null | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No symbols found in common.o"
+          echo "Checking binding.o symbols:"
+          nm binding.o 2>/dev/null | grep -E "(llama_tokenize|cxx11)" | head -10 || echo "No symbols found in binding.o"
+          cd ..
+          rm -rf temp_check
+        fi
+
+    - name: Fetch llama.cpp at specific commit
+      shell: bash
+      run: |
+        # Clone llama.cpp at the specific commit
+        LLAMA_COMMIT="${{ steps.get_commit.outputs.llama_commit }}"
+        echo "Fetching llama.cpp at commit: $LLAMA_COMMIT"
+        
+        # Create a temporary directory for llama.cpp
+        mkdir -p temp_llama
+        cd temp_llama
+        git init
+        git remote add origin https://github.com/ggerganov/llama.cpp.git
+        git fetch --depth 1 origin $LLAMA_COMMIT
+        git checkout $LLAMA_COMMIT
+        cd ..
+
+    - name: Create complete release package  
+      shell: bash
+      run: |
+        # Create a directory named like the release
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}-metal"
+        else
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        fi
+        mkdir -p "$RELEASE_DIR"
+        
+        # Copy files (cross-platform compatible)
+        # Copy all Go files
+        cp *.go "$RELEASE_DIR/" || true
+        cp go.mod go.sum "$RELEASE_DIR/"
+        
+        # Copy source files
+        cp binding.cpp binding.h "$RELEASE_DIR/"
+        cp llama_data_source.cpp llama_data_source.h "$RELEASE_DIR/"
+        
+        # Copy other important files
+        cp LICENSE README.md README_PREBUILT.md "$RELEASE_DIR/" || true
+        cp Makefile "$RELEASE_DIR/"
+        cp renovate.json "$RELEASE_DIR/" || true
+        cp .gitignore .gitmodules "$RELEASE_DIR/" || true
+        
+        # Copy directories
+        mkdir -p "$RELEASE_DIR/scripts"
+        cp -r scripts/* "$RELEASE_DIR/scripts/" || true
+        
+        mkdir -p "$RELEASE_DIR/patches"
+        cp -r patches/* "$RELEASE_DIR/patches/"
+        
+        mkdir -p "$RELEASE_DIR/examples"
+        cp -r examples/* "$RELEASE_DIR/examples/" || true
+        
+        # Copy the pre-built library
+        echo "Checking for libbinding.a or libbinding.lib..."
+        if [ -f "libbinding.a" ]; then
+            echo "Found libbinding.a"
+            cp libbinding.a "$RELEASE_DIR/"
+        elif [ -f "libbinding.lib" ]; then
+            echo "Found libbinding.lib, copying as libbinding.a"
+            cp libbinding.lib "$RELEASE_DIR/libbinding.a"
+        else
+            echo "ERROR: Neither libbinding.a nor libbinding.lib found!"
+            ls -la *.a *.lib 2>/dev/null || true
+        fi
+        
+        # Copy the fetched llama.cpp source
+        echo "Copying llama.cpp source code..."
+        cp -r temp_llama "$RELEASE_DIR/llama.cpp"
+        
+        # Remove .git directory to save space
+        rm -rf "$RELEASE_DIR/llama.cpp/.git"
+        
+        # Save llama.cpp commit hash
+        echo "${{ steps.get_commit.outputs.llama_commit }}" > "$RELEASE_DIR/LLAMA_COMMIT"
+        echo "LLAMA_COMMIT content: $(cat $RELEASE_DIR/LLAMA_COMMIT)"
+        
+        # Verify directory contents
+        echo "Contents of $RELEASE_DIR:"
+        ls -la "$RELEASE_DIR/" | grep -E "(libbinding|LLAMA_COMMIT)"
+        echo "llama.cpp directory size:"
+        du -sh "$RELEASE_DIR/llama.cpp"
+
+    - name: Create tarball (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        if [ "${{ matrix.build_type }}" == "metal" ]; then
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}-metal"
+        else
+          RELEASE_DIR="go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+        fi
+        tar -czf "${RELEASE_DIR}.tar.gz" "$RELEASE_DIR"
+
+    - name: Create tarball (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        tar -czf "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}"
+
+    - name: Verify tarball
+      shell: bash
+      run: |
+        echo "Checking created tarball:"
+        ls -la go-llama.cpp-*.tar.gz
+        echo "Checking for libbinding.a in tarball:"
+        tar -tzf go-llama.cpp-*.tar.gz | grep -E "(libbinding|LLAMA_COMMIT)" || echo "libbinding.a not found in tarball!"
+        echo "First 30 files in tarball:"
+        tar -tzf go-llama.cpp-*.tar.gz 2>/dev/null | head -30 || true
+        
+        # Extract and verify libbinding.a exists
+        echo "Extracting tarball to verify contents:"
+        mkdir -p verify-extract
+        tar -xzf go-llama.cpp-*.tar.gz -C verify-extract
+        echo "Checking extracted libbinding.a:"
+        ls -la verify-extract/*/libbinding.a || echo "libbinding.a not found after extraction!"
+        echo "File type of libbinding.a:"
+        file verify-extract/*/libbinding.a || true
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.build_type == 'metal' && '-metal' || '' }}
+        path: go-llama.cpp-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.build_type == 'metal' && '-metal' || '' }}.tar.gz
+        include-hidden-files: true
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Get llama.cpp commit
+      id: get_commit
+      run: |
+        LLAMA_COMMIT=$(git submodule status llama.cpp | awk '{print $1}')
+        echo "llama_commit=${LLAMA_COMMIT}" >> $GITHUB_OUTPUT
+        echo "Llama.cpp commit: ${LLAMA_COMMIT}"
+        # Also store for the build job
+        echo "LLAMA_COMMIT=${LLAMA_COMMIT}" >> $GITHUB_ENV
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Debug artifacts
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Directory contents:"
+        ls -la
+        echo "Artifacts directory:"
+        ls -la artifacts/
+        echo "Looking for tar.gz files in artifacts:"
+        find artifacts -name "*.tar.gz" -type f
+        
+        # Check one of the tar.gz files
+        echo "Checking darwin-arm64 tarball contents:"
+        tar -tzf artifacts/go-llama.cpp-darwin-arm64/go-llama.cpp-darwin-arm64.tar.gz | grep libbinding || echo "libbinding.a not in tarball"
+        
+        # Extract and check
+        echo "Extracting to verify:"
+        cd artifacts/go-llama.cpp-darwin-arm64
+        tar -xzf go-llama.cpp-darwin-arm64.tar.gz
+        echo "Extracted contents:"
+        ls -la go-llama.cpp-darwin-arm64/
+        echo "Checking for libbinding.a:"
+        ls -la go-llama.cpp-darwin-arm64/libbinding.a || echo "libbinding.a not found!"
+
+    - name: Create Release with Assets
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
+        name: Release ${{ github.ref_name || format('manual-{0}', github.run_number) }}
+        body: |
+          Pre-built libraries for go-llama.cpp
+          
+          **llama.cpp commit**: `${{ steps.get_commit.outputs.llama_commit }}`
+          
+          To use these pre-built libraries, make sure your llama.cpp submodule is at the same commit.
+        draft: ${{ github.event_name == 'workflow_dispatch' }}
+        prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+        files: |
+          artifacts/go-llama.cpp-*/*.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

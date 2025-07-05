@@ -4,6 +4,7 @@
 /ggml-metal.metal
 /libbinding.a
 prepare
+*.o
 
 # just in case
 .DS_Store
@@ -13,3 +14,6 @@ Thumbs.db
 
 # model files downloaded by the test script
 ggllm-test-model.bin
+
+# log files
+*.log
