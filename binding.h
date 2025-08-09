@@ -37,6 +37,16 @@ void *load_model_from_memory(const void *buffer, size_t buffer_size, int n_ctx,
                              bool mul_mat_q, const char *lora,
                              const char *lora_base, bool perplexity);
 
+// Zero-copy mmap loading - addr must remain valid for the model lifetime
+void *load_model_from_mmap(const void *addr, size_t size, int n_ctx,
+                           int n_seed, bool memory_f16, bool mlock,
+                           bool embeddings, bool mmap, bool low_vram,
+                           int n_gpu, int n_batch, const char *maingpu,
+                           const char *tensorsplit, bool numa,
+                           float rope_freq_base, float rope_freq_scale,
+                           bool mul_mat_q, const char *lora,
+                           const char *lora_base, bool perplexity);
+
 int get_embeddings(void *params_ptr, void *state_pr, float *res_embeddings);
 
 int get_token_embeddings(void *params_ptr, void *state_pr, int *tokens,

@@ -1351,6 +1351,140 @@ void *load_model_from_memory(const void *buffer, size_t buffer_size, int n_ctx,
         perplexity);
 }
 
+// Zero-copy mmap wrapper
+void *load_model_from_mmap(const void *addr, size_t size, int n_ctx, int n_seed,
+                           bool memory_f16, bool mlock, bool embeddings,
+                           bool mmap, bool low_vram, int n_gpu_layers,
+                           int n_batch, const char *maingpu,
+                           const char *tensorsplit, bool numa,
+                           float rope_freq_base, float rope_freq_scale,
+                           bool mul_mat_q, const char *lora,
+                           const char *lora_base, bool perplexity) {
+    // Force mmap mode for zero-copy
+    mmap = true;
+
+    // Create gpt_params without model path
+    gpt_params *lparams = new gpt_params;
+
+    llama_model *model;
+    llama_binding_state *state;
+    state = new llama_binding_state;
+    llama_context *ctx;
+
+    lparams->n_ctx = n_ctx;
+    lparams->seed = n_seed;
+    lparams->memory_f16 = memory_f16;
+    lparams->embedding = embeddings;
+    lparams->use_mlock = mlock;
+    lparams->n_gpu_layers = n_gpu_layers;
+    lparams->perplexity = perplexity;
+    lparams->use_mmap = true; // Force mmap for zero-copy
+
+    lparams->low_vram = low_vram;
+    if (rope_freq_base != 0.0f) {
+        lparams->rope_freq_base = rope_freq_base;
+    } else {
+        lparams->rope_freq_base = 10000.0f;
+    }
+
+    if (rope_freq_scale != 0.0f) {
+        lparams->rope_freq_scale = rope_freq_scale;
+    } else {
+        lparams->rope_freq_scale = 1.0f;
+    }
+
+    if (maingpu[0] != '\0') {
+        lparams->main_gpu = std::stoi(maingpu);
+    }
+
+    if (tensorsplit[0] != '\0') {
+        std::string arg_next = tensorsplit;
+        // split string by , and /
+        const std::regex regex{R"([,/]+)"};
+        std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex,
+                                      -1};
+        std::vector<std::string> split_arg{it, {}};
+        GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
+
+        for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
+            if (i < split_arg.size()) {
+                lparams->tensor_split[i] = std::stof(split_arg[i]);
+            } else {
+                lparams->tensor_split[i] = 0.0f;
+            }
+        }
+    }
+
+    lparams->n_batch = n_batch;
+
+    llama_backend_init(numa);
+
+    // Create context params from gpt_params
+    struct llama_context_params ctx_params =
+        llama_context_params_from_gpt_params(*lparams);
+
+    // Load model using zero-copy mmap
+    fprintf(
+        stderr,
+        "%s: loading model from mmap'd memory (zero-copy, size: %zu bytes)\n",
+        __func__, size);
+
+    // Verify GGUF magic number
+    if (size < 4) {
+        fprintf(stderr, "%s: buffer too small\n", __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+
+    uint32_t magic = *(const uint32_t *)addr;
+    if (magic != 0x46554747) { // "GGUF" in little-endian
+        fprintf(stderr, "%s: invalid GGUF magic number: %08x\n", __func__,
+                magic);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+
+    fprintf(stderr, "%s: valid GGUF file detected, size: %zu MB\n", __func__,
+            size / (1024 * 1024));
+
+    // Use the new zero-copy API
+    fprintf(stderr,
+            "%s: calling llama_load_model_from_mmap for zero-copy loading\n",
+            __func__);
+
+    model = llama_load_model_from_mmap(addr, size, ctx_params);
+
+    if (model == nullptr) {
+        fprintf(stderr, "%s: error: failed loading model from mmap'd memory\n",
+                __func__);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+
+    fprintf(stderr, "%s: model loaded successfully from mmap (zero-copy)\n",
+            __func__);
+
+    // Create context with the loaded model
+    ctx = llama_new_context_with_model(model, ctx_params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context for model\n",
+                __func__);
+        llama_free_model(model);
+        delete lparams;
+        delete state;
+        return nullptr;
+    }
+
+    state->model = model;
+    state->ctx = ctx;
+
+    delete lparams;
+    return state;
+}
+
 // The load_binding_model implementation is now provided by the patched
 // common.cpp We just need to make sure our code uses the correct structure type
 

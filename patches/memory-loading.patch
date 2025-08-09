@@ -424,14 +424,14 @@ index b2251ace..87c9408c 100644
      GGML_API void gguf_free(struct gguf_context * ctx);
  
 diff --git a/llama.cpp b/llama.cpp
-index 6e23a077..5855d5aa 100644
+index 6e23a0772..2de4aeb3c 100644
 --- a/llama.cpp
 +++ b/llama.cpp
 @@ -1280,6 +1280,11 @@ struct llama_model_loader {
      int n_created = 0;
  
      int64_t n_elements = 0;
-+    
++
 +    // Memory buffer support
 +    const void * buffer_data = nullptr;
 +    size_t buffer_size = 0;
@@ -453,10 +453,10 @@ index 6e23a077..5855d5aa 100644
 +        use_mmap(false), buffer_data(buffer), buffer_size(size) {
 +        LLAMA_LOG_INFO("%s: entering memory-based constructor\n", __func__);
 +        LLAMA_LOG_INFO("%s: buffer=%p, size=%zu\n", __func__, buffer, size);
-+        
++
 +        // Initialize ctx_meta to nullptr first
 +        ctx_meta = nullptr;
-+        
++
 +        struct gguf_init_params params = {
 +            /*.no_alloc = */ true,
 +            /*.ctx      = */ &ctx_meta,
@@ -467,9 +467,9 @@ index 6e23a077..5855d5aa 100644
 +        if (!ctx_gguf) {
 +            throw std::runtime_error(format("%s: failed to load model from buffer\n", __func__));
 +        }
-+        
++
 +        LLAMA_LOG_INFO("%s: gguf context created successfully, ctx_gguf=%p, ctx_meta=%p\n", __func__, ctx_gguf, ctx_meta);
-+        
++
 +        // Check if ctx_meta was properly initialized
 +        if (!ctx_meta) {
 +            throw std::runtime_error(format("%s: ctx_meta was not initialized by gguf_init_from_buffer\n", __func__));
@@ -478,7 +478,7 @@ index 6e23a077..5855d5aa 100644
 +        LLAMA_LOG_INFO("%s: getting n_kv\n", __func__);
 +        n_kv      = gguf_get_n_kv(ctx_gguf);
 +        LLAMA_LOG_INFO("%s: n_kv = %d\n", __func__, n_kv);
-+        
++
 +        LLAMA_LOG_INFO("%s: getting n_tensors\n", __func__);
 +        n_tensors = gguf_get_n_tensors(ctx_gguf);
 +        LLAMA_LOG_INFO("%s: n_tensors = %d\n", __func__, n_tensors);
@@ -602,13 +602,13 @@ index 6e23a077..5855d5aa 100644
              file.seek(offs, SEEK_SET);
              file.read_raw(cur->data, ggml_nbytes(cur));
          }
-+        
++
 +        // Log tensor loading for debugging
 +        // LLAMA_LOG_INFO("%s: loaded tensor '%s' from %s\n", __func__, ggml_get_name(cur), buffer_data ? "buffer" : "file");
      }
  
      void load_all_data(struct ggml_context * ctx, llama_progress_callback progress_callback, void * progress_callback_user_data, llama_mlock * lmlock) {
-@@ -6296,6 +6443,81 @@ struct llama_model * llama_load_model_from_file(
+@@ -6296,6 +6443,176 @@ struct llama_model * llama_load_model_from_file(
      return model;
  }
  
@@ -618,7 +618,7 @@ index 6e23a077..5855d5aa 100644
 +        struct llama_context_params   params) {
 +    LLAMA_LOG_INFO("%s: starting\n", __func__);
 +    LLAMA_LOG_INFO("%s: buffer=%p, size=%zu\n", __func__, buffer, buffer_size);
-+    
++
 +    ggml_time_init();
 +
 +    LLAMA_LOG_INFO("%s: creating llama_model\n", __func__);
@@ -642,19 +642,19 @@ index 6e23a077..5855d5aa 100644
 +            }
 +        };
 +    }
-+    
++
 +    try {
 +        // Create a memory-based model loader
 +        LLAMA_LOG_INFO("%s: creating llama_model_loader\n", __func__);
 +        std::unique_ptr<llama_model_loader> ml(new llama_model_loader(buffer, buffer_size, false));
 +        LLAMA_LOG_INFO("%s: llama_model_loader created successfully\n", __func__);
-+        
++
 +        LLAMA_LOG_INFO("%s: loading architecture...\n", __func__);
 +        llm_load_arch   (*ml, *model);
-+        
++
 +        LLAMA_LOG_INFO("%s: loading hyperparameters...\n", __func__);
 +        llm_load_hparams(*ml, *model, params.n_ctx, params.rope_freq_base, params.rope_freq_scale);
-+        
++
 +        LLAMA_LOG_INFO("%s: loading vocabulary...\n", __func__);
 +        llm_load_vocab  (*ml, *model);
 +
@@ -674,7 +674,7 @@ index 6e23a077..5855d5aa 100644
 +            *ml, *model, params.n_batch, params.n_gpu_layers,
 +            params.main_gpu, params.tensor_split, params.mul_mat_q, params.low_vram, memory_type,
 +            params.use_mlock, params.progress_callback, params.progress_callback_user_data);
-+        
++
 +        if (params.progress_callback) {
 +            params.progress_callback(1.0f, params.progress_callback_user_data);
 +        }
@@ -687,20 +687,121 @@ index 6e23a077..5855d5aa 100644
 +    return model;
 +}
 +
++// Zero-copy mmap loading - the memory region must remain valid for the lifetime of the model
++struct llama_model * llama_load_model_from_mmap(
++                         const void * addr,
++                               size_t   size,
++        struct llama_context_params   params) {
++    LLAMA_LOG_INFO("%s: loading model from mmap'd memory (zero-copy)\n", __func__);
++    LLAMA_LOG_INFO("%s: addr=%p, size=%zu\n", __func__, addr, size);
++
++    if (!addr || size < 4) {
++        LLAMA_LOG_ERROR("%s: invalid memory region\n", __func__);
++        return nullptr;
++    }
++
++    // Verify GGUF magic
++    uint32_t magic = *(const uint32_t *)addr;
++    if (magic != 0x46554747) { // "GGUF" in little-endian
++        LLAMA_LOG_ERROR("%s: invalid GGUF magic: %08x\n", __func__, magic);
++        return nullptr;
++    }
++
++    ggml_time_init();
++
++    llama_model * model = new llama_model();
++
++    ggml_type memory_type = params.f16_kv ? GGML_TYPE_F16 : GGML_TYPE_F32;
++
++    unsigned cur_percentage = 0;
++    if (params.progress_callback == NULL) {
++        params.progress_callback_user_data = &cur_percentage;
++        params.progress_callback = [](float progress, void * ctx) {
++            unsigned * cur_percentage_p = (unsigned *) ctx;
++            unsigned percentage = (unsigned) (100 * progress);
++            while (percentage > *cur_percentage_p) {
++                *cur_percentage_p = percentage;
++                LLAMA_LOG_INFO(".");
++                if (percentage >= 100) {
++                    LLAMA_LOG_INFO("\n");
++                }
++            }
++        };
++    }
++
++    try {
++        // Create a memory-based model loader with zero-copy flag
++        // The key difference is we pass 'true' for use_mmap to prevent copying
++        LLAMA_LOG_INFO("%s: creating zero-copy llama_model_loader\n", __func__);
++        std::unique_ptr<llama_model_loader> ml(new llama_model_loader(addr, size, true));
++        LLAMA_LOG_INFO("%s: llama_model_loader created successfully (zero-copy mode)\n", __func__);
++
++        LLAMA_LOG_INFO("%s: loading architecture...\n", __func__);
++        llm_load_arch   (*ml, *model);
++
++        LLAMA_LOG_INFO("%s: loading hyperparameters...\n", __func__);
++        llm_load_hparams(*ml, *model, params.n_ctx, params.rope_freq_base, params.rope_freq_scale);
++
++        LLAMA_LOG_INFO("%s: loading vocabulary...\n", __func__);
++        llm_load_vocab  (*ml, *model);
++
++        LLAMA_LOG_INFO("%s: printing model metadata...\n", __func__);
++        llm_load_print_meta(*ml, *model);
++
++        if (model->hparams.n_vocab != model->vocab.id_to_token.size()) {
++            throw std::runtime_error("vocab size mismatch");
++        }
++
++        if (params.vocab_only) {
++            LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
++            return model;
++        }
++
++        // Load tensors with zero-copy
++        LLAMA_LOG_INFO("%s: loading tensors (zero-copy mode)...\n", __func__);
++        llm_load_tensors(*ml, *model, params.n_batch, params.n_gpu_layers, params.main_gpu, params.tensor_split, 
++                        params.mul_mat_q, params.low_vram, memory_type,
++                        false, // use_mlock - not needed for zero-copy
++                        params.progress_callback, params.progress_callback_user_data);
++
++        LLAMA_LOG_INFO("%s: model loaded successfully from mmap (zero-copy)\n", __func__);
++
++        // loading time will be recalculated after the first eval, so
++        // we take page faults deferred by mmap() into consideration
++        model->t_load_us = ggml_time_us() - model->t_start_us;
++
++        if (params.progress_callback) {
++            params.progress_callback(1.0f, params.progress_callback_user_data);
++        }
++    } catch (const std::exception & err) {
++        LLAMA_LOG_ERROR("error loading model from mmap: %s\n", err.what());
++        delete model;
++        return nullptr;
++    }
++
++    return model;
++}
++
  void llama_free_model(struct llama_model * model) {
      delete model;
  }
 diff --git a/llama.h b/llama.h
-index 350268b9..60c0d5a9 100644
+index 350268b9a..7a38b475a 100644
 --- a/llama.h
 +++ b/llama.h
-@@ -217,6 +217,11 @@ extern "C" {
+@@ -217,6 +217,17 @@ extern "C" {
                               const char * path_model,
              struct llama_context_params   params);
  
 +    LLAMA_API struct llama_model * llama_load_model_from_buffer(
 +                             const void * buffer,
 +                                   size_t   buffer_size,
++            struct llama_context_params   params);
++
++    // Zero-copy mmap loading - loads model from already mapped memory
++    LLAMA_API struct llama_model * llama_load_model_from_mmap(
++                             const void * addr,
++                                   size_t   size,
 +            struct llama_context_params   params);
 +
      LLAMA_API void llama_free_model(struct llama_model * model);

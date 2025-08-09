@@ -10,24 +10,27 @@ package llama
 // #include <string.h>
 import "C"
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 )
 
 type LLama struct {
-    state       unsafe.Pointer
-    embeddings  bool
-    contextSize int
-    // Keep a reference to the model data to prevent GC
-    modelData []byte
-    // Keep the model bytes pinned for the lifetime of the model (Go 1.21+)
-    pin runtime.Pinner
-    // Mutex to protect concurrent predict calls
-    predictMu sync.Mutex
+	state       unsafe.Pointer
+	embeddings  bool
+	contextSize int
+	// Keep a reference to the model data to prevent GC
+	modelData []byte
+	// Keep the model bytes pinned for the lifetime of the model (Go 1.21+)
+	pin runtime.Pinner
+	// Mutex to protect concurrent predict calls
+	predictMu sync.Mutex
 }
 
 func New(model string, opts ...ModelOption) (*LLama, error) {
@@ -62,74 +65,200 @@ func New(model string, opts ...ModelOption) (*LLama, error) {
 }
 
 func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
-    mo := NewModelOptions(opts...)
-    loraBase := C.CString(mo.LoraBase)
-    defer C.free(unsafe.Pointer(loraBase))
-    loraAdapter := C.CString(mo.LoraAdapter)
-    defer C.free(unsafe.Pointer(loraAdapter))
+	mo := NewModelOptions(opts...)
+	loraBase := C.CString(mo.LoraBase)
+	defer C.free(unsafe.Pointer(loraBase))
+	loraAdapter := C.CString(mo.LoraAdapter)
+	defer C.free(unsafe.Pointer(loraAdapter))
 
-    MulMatQ := true
+	MulMatQ := true
 
-    if mo.MulMatQ != nil {
-        MulMatQ = *mo.MulMatQ
-    }
+	if mo.MulMatQ != nil {
+		MulMatQ = *mo.MulMatQ
+	}
 
-    if len(modelData) == 0 {
-        return nil, fmt.Errorf("model data is empty")
-    }
+	if len(modelData) == 0 {
+		return nil, fmt.Errorf("model data is empty")
+	}
 
-    // Allocate C strings up-front and free them after the call
-    mainGPU := C.CString(mo.MainGPU)
-    defer C.free(unsafe.Pointer(mainGPU))
-    tensorSplit := C.CString(mo.TensorSplit)
-    defer C.free(unsafe.Pointer(tensorSplit))
+	// Allocate C strings up-front and free them after the call
+	mainGPU := C.CString(mo.MainGPU)
+	defer C.free(unsafe.Pointer(mainGPU))
+	tensorSplit := C.CString(mo.TensorSplit)
+	defer C.free(unsafe.Pointer(tensorSplit))
 
-    // Zero-copy: pass a pointer into the Go slice to C and pin it to make it
-    // non-movable by GC while C code may access it.
-    dataPtr := unsafe.Pointer(&modelData[0])
-    dataSize := C.size_t(len(modelData))
-    var pinner runtime.Pinner
-    pinner.Pin(&modelData[0])
+	// Zero-copy: pass a pointer into the Go slice to C and pin it to make it
+	// non-movable by GC while C code may access it.
+	dataPtr := unsafe.Pointer(&modelData[0])
+	dataSize := C.size_t(len(modelData))
+	var pinner runtime.Pinner
+	pinner.Pin(&modelData[0])
 
-    // Debug
-    if os.Getenv("LLAMA_DEBUG") != "" {
-        fmt.Printf("NewFromMemory: using Go buffer %d bytes at %p (zero-copy)\n", dataSize, dataPtr)
-    }
+	// Debug
+	if os.Getenv("LLAMA_DEBUG") != "" {
+		fmt.Printf("NewFromMemory: using Go buffer %d bytes at %p (zero-copy)\n", dataSize, dataPtr)
+	}
 
-    result := C.load_model_from_memory(dataPtr, dataSize,
-        C.int(mo.ContextSize), C.int(mo.Seed),
-        C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
-        C.int(mo.NGPULayers), C.int(mo.NBatch), mainGPU, tensorSplit, C.bool(mo.NUMA),
-        C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
-        C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
-    )
+	result := C.load_model_from_memory(dataPtr, dataSize,
+		C.int(mo.ContextSize), C.int(mo.Seed),
+		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
+		C.int(mo.NGPULayers), C.int(mo.NBatch), mainGPU, tensorSplit, C.bool(mo.NUMA),
+		C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
+		C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
+	)
 
-    if result == nil {
-        // Unpin on failure
-        pinner.Unpin()
-        return nil, fmt.Errorf("failed loading model from memory")
-    }
+	if result == nil {
+		// Unpin on failure
+		pinner.Unpin()
+		return nil, fmt.Errorf("failed loading model from memory")
+	}
 
-    ll := &LLama{
-        state:       result,
-        contextSize: mo.ContextSize,
-        embeddings:  mo.Embeddings,
-        modelData:   modelData, // Keep reference to prevent GC
-    }
-    // Transfer the pinner to the struct to keep it pinned for the lifetime of l
-    ll.pin = pinner
-    // Pin the underlying array for the lifetime of the model to ensure C does
-    // not observe the memory moved or freed by the GC.
-    // Note: already pinned above before calling into C; keep it pinned until Free.
-    return ll, nil
+	ll := &LLama{
+		state:       result,
+		contextSize: mo.ContextSize,
+		embeddings:  mo.Embeddings,
+		modelData:   modelData, // Keep reference to prevent GC
+	}
+	// Transfer the pinner to the struct to keep it pinned for the lifetime of l
+	ll.pin = pinner
+	// Pin the underlying array for the lifetime of the model to ensure C does
+	// not observe the memory moved or freed by the GC.
+	// Note: already pinned above before calling into C; keep it pinned until Free.
+	return ll, nil
+}
+
+// LoadSelfContainedModel loads a model that has been appended to the current binary
+// It detects self-contained models and uses zero-copy mmap loading
+func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
+	// Get the path to the current executable
+	execPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Open the executable for reading
+	file, err := os.Open(execPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open executable: %w", err)
+	}
+	defer file.Close()
+
+	// Get file size
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat executable: %w", err)
+	}
+	fileSize := info.Size()
+
+	// Read the last 8 bytes to get the model size (uint64 in little-endian)
+	if fileSize < 8 {
+		return nil, fmt.Errorf("executable too small to contain self-contained model")
+	}
+
+	_, err = file.Seek(-8, io.SeekEnd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to seek to model size marker: %w", err)
+	}
+
+	var modelSize uint64
+	err = binary.Read(file, binary.LittleEndian, &modelSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read model size: %w", err)
+	}
+
+	// Validate model size
+	if modelSize == 0 || modelSize > uint64(fileSize-8) {
+		return nil, fmt.Errorf("invalid model size: %d (file size: %d)", modelSize, fileSize)
+	}
+
+	fmt.Printf("Found self-contained model of size %d MB, mapping into memory...\n", modelSize/(1024*1024))
+
+	// Calculate the offset where the model starts
+	modelOffset := fileSize - int64(modelSize) - 8
+
+	// Memory map the model region
+	fd := int(file.Fd())
+
+	// Use syscall.Mmap to map only the model portion
+	data, err := syscall.Mmap(fd, modelOffset, int(modelSize), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	if err != nil {
+		return nil, fmt.Errorf("failed to mmap model: %w", err)
+	}
+
+	// Get the base address of the mmap'd region
+	addr := uintptr(unsafe.Pointer(&data[0]))
+
+	fmt.Printf("Successfully mapped self-contained model at address %p\n", unsafe.Pointer(addr))
+
+	// Use the zero-copy mmap loader
+	return NewFromMMap(addr, int(modelSize), opts...)
+}
+
+// NewFromMMap creates a new LLama model from a memory-mapped region (zero-copy)
+// The memory region must remain valid for the lifetime of the model
+func NewFromMMap(addr uintptr, size int, opts ...ModelOption) (*LLama, error) {
+	mo := NewModelOptions(opts...)
+
+	// Force mmap mode for zero-copy
+	mo.MMap = true
+
+	loraBase := C.CString(mo.LoraBase)
+	defer C.free(unsafe.Pointer(loraBase))
+	loraAdapter := C.CString(mo.LoraAdapter)
+	defer C.free(unsafe.Pointer(loraAdapter))
+
+	MulMatQ := true
+	if mo.MulMatQ != nil {
+		MulMatQ = *mo.MulMatQ
+	}
+
+	if size == 0 {
+		return nil, fmt.Errorf("mmap size is zero")
+	}
+
+	// Allocate C strings up-front and free them after the call
+	mainGPU := C.CString(mo.MainGPU)
+	defer C.free(unsafe.Pointer(mainGPU))
+	tensorSplit := C.CString(mo.TensorSplit)
+	defer C.free(unsafe.Pointer(tensorSplit))
+
+	// Convert address to unsafe.Pointer
+	dataPtr := unsafe.Pointer(addr)
+	dataSize := C.size_t(size)
+
+	// Debug
+	if os.Getenv("LLAMA_DEBUG") != "" {
+		fmt.Printf("NewFromMMap: using mmap'd memory %d bytes at %p (zero-copy)\n", dataSize, dataPtr)
+	}
+
+	result := C.load_model_from_mmap(dataPtr, dataSize,
+		C.int(mo.ContextSize), C.int(mo.Seed),
+		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(true), C.bool(mo.LowVRAM),
+		C.int(mo.NGPULayers), C.int(mo.NBatch), mainGPU, tensorSplit, C.bool(mo.NUMA),
+		C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
+		C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
+	)
+
+	if result == nil {
+		return nil, fmt.Errorf("failed loading model from mmap")
+	}
+
+	ll := &LLama{
+		state:       result,
+		contextSize: mo.ContextSize,
+		embeddings:  mo.Embeddings,
+		// No modelData or pin for mmap - memory is externally managed
+	}
+
+	return ll, nil
 }
 
 func (l *LLama) Free() {
-    C.llama_binding_free_model(l.state)
-    // Unpin after the model is freed on the C side
-    if len(l.modelData) > 0 {
-        l.pin.Unpin()
-    }
+	C.llama_binding_free_model(l.state)
+	// Unpin after the model is freed on the C side
+	if len(l.modelData) > 0 {
+		l.pin.Unpin()
+	}
 }
 
 func (l *LLama) LoadState(state string) error {
