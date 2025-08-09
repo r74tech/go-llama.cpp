@@ -17,7 +17,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"unsafe"
 )
 
@@ -176,17 +175,30 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 	// Calculate the offset where the model starts
 	modelOffset := fileSize - int64(modelSize) - 8
 
-	// Memory map the model region
+	// Memory map the model region using platform-specific implementation
 	fd := int(file.Fd())
 
-	// Use syscall.Mmap to map only the model portion
-	data, err := syscall.Mmap(fd, modelOffset, int(modelSize), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	addr, _, err := mmapModel(fd, modelOffset, int(modelSize))
 	if err != nil {
-		return nil, fmt.Errorf("failed to mmap model: %w", err)
-	}
+		// Fallback to standard memory loading if mmap fails
+		fmt.Printf("mmap failed (%v), falling back to standard memory loading\n", err)
 
-	// Get the base address of the mmap'd region
-	addr := uintptr(unsafe.Pointer(&data[0]))
+		// Seek to model start
+		_, err = file.Seek(modelOffset, io.SeekStart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to seek to model start: %w", err)
+		}
+
+		// Read model data
+		modelData := make([]byte, modelSize)
+		_, err = io.ReadFull(file, modelData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read model data: %w", err)
+		}
+
+		fmt.Printf("Successfully loaded self-contained model into memory\n")
+		return NewFromMemory(modelData, opts...)
+	}
 
 	fmt.Printf("Successfully mapped self-contained model at address %p\n", unsafe.Pointer(addr))
 
