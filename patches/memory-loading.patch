@@ -1,5 +1,5 @@
 diff --git a/ggml.c b/ggml.c
-index a0be068d..648e926f 100644
+index a0be068d6..34b10690c 100644
 --- a/ggml.c
 +++ b/ggml.c
 @@ -19700,6 +19700,21 @@ static bool gguf_fread_el(FILE * file, void * dst, size_t size, size_t * offset)
@@ -24,7 +24,7 @@ index a0be068d..648e926f 100644
  // NOTE: temporary handling of GGUFv1 >> remove after Oct 2023
  static bool gguf_fread_str_cur(FILE * file, struct gguf_str * p, size_t * offset) {
      p->n    = 0;
-@@ -20062,6 +20077,333 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
+@@ -20062,6 +20077,338 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
      return ctx;
  }
  
@@ -35,7 +35,7 @@ index a0be068d..648e926f 100644
 +
 +    bool ok = true;
 +
-+    ok = ok && gguf_mread_el(buffer, buffer_size, &p->n, sizeof(p->n), offset); 
++    ok = ok && gguf_mread_el(buffer, buffer_size, &p->n, sizeof(p->n), offset);
 +    p->data = calloc(p->n + 1, 1);
 +    ok = ok && gguf_mread_el(buffer, buffer_size, p->data, p->n, offset);
 +
@@ -49,8 +49,8 @@ index a0be068d..648e926f 100644
 +    bool ok = true;
 +
 +    uint32_t n = 0;
-+    ok = ok && gguf_mread_el(buffer, buffer_size, &n, sizeof(n), offset); 
-+    p->data = calloc(n + 1, 1); 
++    ok = ok && gguf_mread_el(buffer, buffer_size, &n, sizeof(n), offset);
++    p->data = calloc(n + 1, 1);
 +    p->n = n;
 +    ok = ok && gguf_mread_el(buffer, buffer_size, p->data, p->n, offset);
 +
@@ -280,7 +280,7 @@ index a0be068d..648e926f 100644
 +        }
 +    }
 +
-+    // Store the buffer pointer - we always need this for memory-based loading
++    // Store the buffer pointer
 +    ctx->data = (void *)buffer;
 +
 +    // load the tensor data only if requested
@@ -306,7 +306,7 @@ index a0be068d..648e926f 100644
 +        if (!params.no_alloc) {
 +            // Create a single large tensor to hold all the data, similar to gguf_init_from_file
 +            data = ggml_new_tensor_1d(ctx_data, GGML_TYPE_I8, ctx->size);
-+            
++
 +            if (!data) {
 +                fprintf(stderr, "%s: failed to create data tensor\n", __func__);
 +                ggml_free(ctx_data);
@@ -316,10 +316,12 @@ index a0be068d..648e926f 100644
 +
 +            // Copy the tensor data from the buffer
 +            memcpy(data->data, (const char *)buffer + ctx->offset, ctx->size);
-+            
-+            ctx->data = data->data;
-+        }
 +
++            ctx->data = data->data;
++        } else {
++            // For zero-copy mode with no_alloc, just point to the buffer directly
++            ctx->data = (void *)((const char *)buffer + ctx->offset);
++        }
 +        ggml_set_no_alloc(ctx_data, true);
 +
 +        // create the tensors
@@ -343,7 +345,10 @@ index a0be068d..648e926f 100644
 +            ggml_set_name(cur, ctx->infos[i].name.data);
 +
 +            // point the data member to the appropriate location in the binary blob using the tensor infos
-+            if (!params.no_alloc) {
++            if (params.no_alloc) {
++                // Zero-copy: point directly to buffer
++                cur->data = (char *) ctx->data + ctx->infos[i].offset;
++            } else {
 +                // offset from data (not from start of buffer)
 +                cur->data = (char *) data->data + ctx->infos[i].offset;
 +            }
@@ -358,7 +363,7 @@ index a0be068d..648e926f 100644
  void gguf_free(struct gguf_context * ctx) {
      if (ctx == NULL) {
          return;
-@@ -20120,6 +20462,10 @@ const char * gguf_type_name(enum gguf_type type) {
+@@ -20120,6 +20467,10 @@ const char * gguf_type_name(enum gguf_type type) {
  }
  
  int gguf_get_version(const struct gguf_context * ctx) {
@@ -369,7 +374,7 @@ index a0be068d..648e926f 100644
      return ctx->header.version;
  }
  
-@@ -20136,6 +20482,10 @@ void * gguf_get_data(const struct gguf_context * ctx) {
+@@ -20136,6 +20487,10 @@ void * gguf_get_data(const struct gguf_context * ctx) {
  }
  
  int gguf_get_n_kv(const struct gguf_context * ctx) {
@@ -380,7 +385,7 @@ index a0be068d..648e926f 100644
      return ctx->header.n_kv;
  }
  
-@@ -20230,6 +20580,10 @@ const char * gguf_get_val_str (const struct gguf_context * ctx, int i) {
+@@ -20230,6 +20585,10 @@ const char * gguf_get_val_str (const struct gguf_context * ctx, int i) {
  }
  
  int gguf_get_n_tensors(const struct gguf_context * ctx) {
@@ -391,7 +396,7 @@ index a0be068d..648e926f 100644
      return ctx->header.n_tensors;
  }
  
-@@ -20254,6 +20608,18 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int i) {
+@@ -20254,6 +20613,18 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int i) {
  }
  
  char * gguf_get_tensor_name(const struct gguf_context * ctx, int i) {
@@ -411,7 +416,7 @@ index a0be068d..648e926f 100644
  }
  
 diff --git a/ggml.h b/ggml.h
-index b2251ace..87c9408c 100644
+index b2251acef..87c9408c6 100644
 --- a/ggml.h
 +++ b/ggml.h
 @@ -1876,7 +1876,7 @@ extern "C" {
@@ -424,7 +429,7 @@ index b2251ace..87c9408c 100644
      GGML_API void gguf_free(struct gguf_context * ctx);
  
 diff --git a/llama.cpp b/llama.cpp
-index 6e23a0772..2de4aeb3c 100644
+index 6e23a0772..2c4c3ad1d 100644
 --- a/llama.cpp
 +++ b/llama.cpp
 @@ -1280,6 +1280,11 @@ struct llama_model_loader {
@@ -444,13 +449,13 @@ index 6e23a0772..2de4aeb3c 100644
      struct ggml_context * ctx_meta = NULL;
  
 +    // Constructor for memory-based loading
-+    llama_model_loader(const void * buffer, size_t size, bool use_mmap_) : 
++    llama_model_loader(const void * buffer, size_t size, bool use_mmap_) :
 +#ifdef _WIN32
 +        file("NUL", "rb"),
 +#else
 +        file("/dev/null", "rb"),
 +#endif
-+        use_mmap(false), buffer_data(buffer), buffer_size(size) {
++        use_mmap(use_mmap_), buffer_data(buffer), buffer_size(size) {
 +        LLAMA_LOG_INFO("%s: entering memory-based constructor\n", __func__);
 +        LLAMA_LOG_INFO("%s: buffer=%p, size=%zu\n", __func__, buffer, size);
 +
@@ -458,11 +463,11 @@ index 6e23a0772..2de4aeb3c 100644
 +        ctx_meta = nullptr;
 +
 +        struct gguf_init_params params = {
-+            /*.no_alloc = */ true,
++            /*.no_alloc = */ use_mmap_,  // Only use no_alloc for zero-copy mode
 +            /*.ctx      = */ &ctx_meta,
 +        };
 +
-+        LLAMA_LOG_INFO("%s: calling gguf_init_from_buffer\n", __func__);
++        LLAMA_LOG_INFO("%s: calling gguf_init_from_buffer with use_mmap=%d\n", __func__, use_mmap_);
 +        ctx_gguf = gguf_init_from_buffer(buffer, size, params);
 +        if (!ctx_gguf) {
 +            throw std::runtime_error(format("%s: failed to load model from buffer\n", __func__));
@@ -490,20 +495,20 @@ index 6e23a0772..2de4aeb3c 100644
 +        LLAMA_LOG_INFO("%s: iterating through tensors\n", __func__);
 +        for (int i = 0; i < n_tensors; i++) {
 +            LLAMA_LOG_INFO("%s: getting tensor %d name\n", __func__, i);
-+            
++
 +            // Add extra validation for Windows
 +#ifdef _WIN32
 +            if (!ctx_gguf) {
 +                throw std::runtime_error(format("%s: ctx_gguf became NULL during iteration\n", __func__));
 +            }
 +#endif
-+            
++
 +            const char * name = gguf_get_tensor_name(ctx_gguf, i);
 +            if (!name) {
 +                throw std::runtime_error(format("%s: tensor %d has no name\n", __func__, i));
 +            }
 +            LLAMA_LOG_INFO("%s: tensor %d name = '%s'\n", __func__, i, name);
-+            
++
 +            LLAMA_LOG_INFO("%s: getting tensor from ctx_meta\n", __func__);
 +            struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
 +            if (!t) {
@@ -576,27 +581,35 @@ index 6e23a0772..2de4aeb3c 100644
          if (idx < 0) {
              throw std::runtime_error(format("%s: tensor '%s' not found in the file", __func__, name));
          }
-@@ -1505,10 +1631,31 @@ struct llama_model_loader {
+@@ -1504,11 +1630,38 @@ struct llama_model_loader {
+         const size_t offs = file_offset(ggml_get_name(cur));
  
          if (use_mmap) {
-             cur->data = (uint8_t *) mapping->addr + offs;
+-            cur->data = (uint8_t *) mapping->addr + offs;
++            if (mapping && mapping->addr) {
++                // Traditional file mmap
++                cur->data = (uint8_t *) mapping->addr + offs;
++            } else if (buffer_data) {
++                // Zero-copy from provided buffer
++                cur->data = (uint8_t *) buffer_data + offs;
++            }
 +        } else if (buffer_data) {
 +            // Load from memory buffer
 +            const size_t tensor_size = ggml_nbytes(cur);
-+            
++
 +            // Debug output
-+            // LLAMA_LOG_INFO("%s: loading tensor '%s' offset=%zu size=%zu buffer_size=%zu\n", 
++            // LLAMA_LOG_INFO("%s: loading tensor '%s' offset=%zu size=%zu buffer_size=%zu\n",
 +            //                __func__, ggml_get_name(cur), offs, tensor_size, buffer_size);
-+            
++
 +            if (offs + tensor_size > buffer_size) {
-+                throw std::runtime_error(format("%s: tensor '%s' data out of bounds (offset=%zu, size=%zu, buffer_size=%zu)", 
++                throw std::runtime_error(format("%s: tensor '%s' data out of bounds (offset=%zu, size=%zu, buffer_size=%zu)",
 +                                              __func__, ggml_get_name(cur), offs, tensor_size, buffer_size));
 +            }
-+            
++
 +            if (cur->data == nullptr) {
 +                throw std::runtime_error(format("%s: tensor '%s' has no data buffer", __func__, ggml_get_name(cur)));
 +            }
-+            
++
 +            memcpy(cur->data, (const char *)buffer_data + offs, tensor_size);
          } else {
              file.seek(offs, SEEK_SET);
@@ -608,7 +621,7 @@ index 6e23a0772..2de4aeb3c 100644
      }
  
      void load_all_data(struct ggml_context * ctx, llama_progress_callback progress_callback, void * progress_callback_user_data, llama_mlock * lmlock) {
-@@ -6296,6 +6443,176 @@ struct llama_model * llama_load_model_from_file(
+@@ -6296,6 +6449,176 @@ struct llama_model * llama_load_model_from_file(
      return model;
  }
  
@@ -759,7 +772,7 @@ index 6e23a0772..2de4aeb3c 100644
 +
 +        // Load tensors with zero-copy
 +        LLAMA_LOG_INFO("%s: loading tensors (zero-copy mode)...\n", __func__);
-+        llm_load_tensors(*ml, *model, params.n_batch, params.n_gpu_layers, params.main_gpu, params.tensor_split, 
++        llm_load_tensors(*ml, *model, params.n_batch, params.n_gpu_layers, params.main_gpu, params.tensor_split,
 +                        params.mul_mat_q, params.low_vram, memory_type,
 +                        false, // use_mlock - not needed for zero-copy
 +                        params.progress_callback, params.progress_callback_user_data);

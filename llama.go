@@ -175,10 +175,14 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 	// Calculate the offset where the model starts
 	modelOffset := fileSize - int64(modelSize) - 8
 
+	// Debug output
+	fmt.Printf("Debug: File size: %d, Model size: %d, Model offset: %d (0x%x)\n",
+		fileSize, modelSize, modelOffset, modelOffset)
+
 	// Memory map the model region using platform-specific implementation
 	fd := int(file.Fd())
 
-	addr, _, err := mmapModel(fd, modelOffset, int(modelSize))
+	addr, mappedData, err := mmapModel(fd, modelOffset, int(modelSize))
 	if err != nil {
 		// Fallback to standard memory loading if mmap fails
 		fmt.Printf("mmap failed (%v), falling back to standard memory loading\n", err)
@@ -201,6 +205,18 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 	}
 
 	fmt.Printf("Successfully mapped self-contained model at address %p\n", unsafe.Pointer(addr))
+
+	// Debug: Check the first 16 bytes to verify GGUF header
+	if len(mappedData) >= 16 {
+		fmt.Printf("Debug: First 16 bytes of mapped data: % 02x\n", mappedData[:16])
+		// Check for GGUF magic (0x46554747 = "GGUF" in little-endian)
+		magic := binary.LittleEndian.Uint32(mappedData[0:4])
+		if magic == 0x46554747 {
+			fmt.Printf("Debug: ✅ Valid GGUF header found at mapped address\n")
+		} else {
+			fmt.Printf("Debug: ⚠️ Invalid magic: 0x%08x (expected 0x46554747 for GGUF)\n", magic)
+		}
+	}
 
 	// Use the zero-copy mmap loader
 	return NewFromMMap(addr, int(modelSize), opts...)

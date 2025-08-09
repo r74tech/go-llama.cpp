@@ -16,6 +16,9 @@ func mmapModel(fd int, offset int64, size int) (uintptr, []byte, error) {
 	pageAlignedOffset := (offset / pageSize) * pageSize
 	adjustment := int(offset - pageAlignedOffset)
 	mapSize := size + adjustment
+	
+	fmt.Printf("Debug mmap: offset=%d (0x%x), pageAlignedOffset=%d (0x%x), adjustment=%d, mapSize=%d\n",
+		offset, offset, pageAlignedOffset, pageAlignedOffset, adjustment, mapSize)
 
 	// Use syscall.Mmap to map the model portion
 	data, err := syscall.Mmap(fd, pageAlignedOffset, mapSize, syscall.PROT_READ, syscall.MAP_PRIVATE)
@@ -27,6 +30,8 @@ func mmapModel(fd int, offset int64, size int) (uintptr, []byte, error) {
 	// Skip the page alignment padding
 	modelData := data[adjustment:]
 	addr := uintptr(unsafe.Pointer(&modelData[0]))
+	
+	fmt.Printf("Debug mmap: mapped %d bytes, returning data from offset %d\n", len(data), adjustment)
 
 	return addr, modelData[:size], nil
 }
