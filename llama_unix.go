@@ -11,14 +11,22 @@ import (
 
 // mmapModel maps a file region into memory (Unix systems)
 func mmapModel(fd int, offset int64, size int) (uintptr, []byte, error) {
+	// mmap requires page-aligned offset
+	pageSize := int64(syscall.Getpagesize())
+	pageAlignedOffset := (offset / pageSize) * pageSize
+	adjustment := int(offset - pageAlignedOffset)
+	mapSize := size + adjustment
+
 	// Use syscall.Mmap to map the model portion
-	data, err := syscall.Mmap(fd, offset, size, syscall.PROT_READ, syscall.MAP_PRIVATE)
+	data, err := syscall.Mmap(fd, pageAlignedOffset, mapSize, syscall.PROT_READ, syscall.MAP_PRIVATE)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to mmap model: %w", err)
 	}
 
-	// Get the base address of the mmap'd region
-	addr := uintptr(unsafe.Pointer(&data[0]))
+	// Return the adjusted address pointing to the actual model data
+	// Skip the page alignment padding
+	modelData := data[adjustment:]
+	addr := uintptr(unsafe.Pointer(&modelData[0]))
 
-	return addr, data, nil
+	return addr, modelData[:size], nil
 }
