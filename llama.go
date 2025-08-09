@@ -19,15 +19,15 @@ import (
 )
 
 type LLama struct {
-	state       unsafe.Pointer
-	embeddings  bool
-	contextSize int
-	// Keep a reference to the model data to prevent GC
-	modelData []byte
-	// C memory pointer for model data (needs to be freed)
-	cModelData unsafe.Pointer
-	// Mutex to protect concurrent predict calls
-	predictMu sync.Mutex
+    state       unsafe.Pointer
+    embeddings  bool
+    contextSize int
+    // Keep a reference to the model data to prevent GC
+    modelData []byte
+    // Keep the model bytes pinned for the lifetime of the model (Go 1.21+)
+    pin runtime.Pinner
+    // Mutex to protect concurrent predict calls
+    predictMu sync.Mutex
 }
 
 func New(model string, opts ...ModelOption) (*LLama, error) {
@@ -62,68 +62,74 @@ func New(model string, opts ...ModelOption) (*LLama, error) {
 }
 
 func NewFromMemory(modelData []byte, opts ...ModelOption) (*LLama, error) {
-	mo := NewModelOptions(opts...)
-	loraBase := C.CString(mo.LoraBase)
-	defer C.free(unsafe.Pointer(loraBase))
-	loraAdapter := C.CString(mo.LoraAdapter)
-	defer C.free(unsafe.Pointer(loraAdapter))
+    mo := NewModelOptions(opts...)
+    loraBase := C.CString(mo.LoraBase)
+    defer C.free(unsafe.Pointer(loraBase))
+    loraAdapter := C.CString(mo.LoraAdapter)
+    defer C.free(unsafe.Pointer(loraAdapter))
 
-	MulMatQ := true
+    MulMatQ := true
 
-	if mo.MulMatQ != nil {
-		MulMatQ = *mo.MulMatQ
-	}
+    if mo.MulMatQ != nil {
+        MulMatQ = *mo.MulMatQ
+    }
 
-	// Make a copy of the model data to ensure it's not moved by GC
-	// This copy will be owned by the LLama struct
-	modelDataCopy := make([]byte, len(modelData))
-	copy(modelDataCopy, modelData)
+    if len(modelData) == 0 {
+        return nil, fmt.Errorf("model data is empty")
+    }
 
-	// Allocate C memory for the model data to ensure it's not moved by Go's GC
-	dataSize := C.size_t(len(modelDataCopy))
-	cDataPtr := C.malloc(dataSize)
-	if cDataPtr == nil {
-		return nil, fmt.Errorf("failed to allocate memory for model data")
-	}
+    // Allocate C strings up-front and free them after the call
+    mainGPU := C.CString(mo.MainGPU)
+    defer C.free(unsafe.Pointer(mainGPU))
+    tensorSplit := C.CString(mo.TensorSplit)
+    defer C.free(unsafe.Pointer(tensorSplit))
 
-	// Copy the data to C memory
-	C.memcpy(cDataPtr, unsafe.Pointer(&modelDataCopy[0]), dataSize)
+    // Zero-copy: pass a pointer into the Go slice to C and pin it to make it
+    // non-movable by GC while C code may access it.
+    dataPtr := unsafe.Pointer(&modelData[0])
+    dataSize := C.size_t(len(modelData))
+    var pinner runtime.Pinner
+    pinner.Pin(&modelData[0])
 
-	// Debug: Print memory info
-	if os.Getenv("LLAMA_DEBUG") != "" {
-		fmt.Printf("NewFromMemory: allocated %d bytes at %p\n", dataSize, cDataPtr)
-	}
+    // Debug
+    if os.Getenv("LLAMA_DEBUG") != "" {
+        fmt.Printf("NewFromMemory: using Go buffer %d bytes at %p (zero-copy)\n", dataSize, dataPtr)
+    }
 
-	result := C.load_model_from_memory(cDataPtr, dataSize,
-		C.int(mo.ContextSize), C.int(mo.Seed),
-		C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
-		C.int(mo.NGPULayers), C.int(mo.NBatch), C.CString(mo.MainGPU), C.CString(mo.TensorSplit), C.bool(mo.NUMA),
-		C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
-		C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
-	)
+    result := C.load_model_from_memory(dataPtr, dataSize,
+        C.int(mo.ContextSize), C.int(mo.Seed),
+        C.bool(mo.F16Memory), C.bool(mo.MLock), C.bool(mo.Embeddings), C.bool(mo.MMap), C.bool(mo.LowVRAM),
+        C.int(mo.NGPULayers), C.int(mo.NBatch), mainGPU, tensorSplit, C.bool(mo.NUMA),
+        C.float(mo.FreqRopeBase), C.float(mo.FreqRopeScale),
+        C.bool(MulMatQ), loraAdapter, loraBase, C.bool(mo.Perplexity),
+    )
 
-	if result == nil {
-		C.free(cDataPtr)
-		return nil, fmt.Errorf("failed loading model from memory")
-	}
+    if result == nil {
+        // Unpin on failure
+        pinner.Unpin()
+        return nil, fmt.Errorf("failed loading model from memory")
+    }
 
-	ll := &LLama{
-		state:       result,
-		contextSize: mo.ContextSize,
-		embeddings:  mo.Embeddings,
-		modelData:   modelDataCopy, // Keep a reference to prevent GC
-		cModelData:  cDataPtr,      // Store C pointer to free later
-	}
-	return ll, nil
+    ll := &LLama{
+        state:       result,
+        contextSize: mo.ContextSize,
+        embeddings:  mo.Embeddings,
+        modelData:   modelData, // Keep reference to prevent GC
+    }
+    // Transfer the pinner to the struct to keep it pinned for the lifetime of l
+    ll.pin = pinner
+    // Pin the underlying array for the lifetime of the model to ensure C does
+    // not observe the memory moved or freed by the GC.
+    // Note: already pinned above before calling into C; keep it pinned until Free.
+    return ll, nil
 }
 
 func (l *LLama) Free() {
-	C.llama_binding_free_model(l.state)
-	// Free the C-allocated model data if it exists
-	if l.cModelData != nil {
-		C.free(l.cModelData)
-		l.cModelData = nil
-	}
+    C.llama_binding_free_model(l.state)
+    // Unpin after the model is freed on the C side
+    if len(l.modelData) > 0 {
+        l.pin.Unpin()
+    }
 }
 
 func (l *LLama) LoadState(state string) error {
