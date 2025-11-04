@@ -179,9 +179,80 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 	fmt.Printf("Debug: File size: %d, Model size: %d, Model offset: %d (0x%x)\n",
 		fileSize, modelSize, modelOffset, modelOffset)
 
-	// Memory map the model region using platform-specific implementation
-	fd := int(file.Fd())
+	// Check if model is too large for mmap (>2GB on some systems)
+	const maxMmapSize = 2 * 1024 * 1024 * 1024 // 2GB limit for safety
+	if modelSize > maxMmapSize {
+		fmt.Printf("Model size %.2f GB exceeds safe mmap limit, using standard memory loading\n",
+			float64(modelSize)/(1024*1024*1024))
 
+		// Seek to model start
+		_, err = file.Seek(modelOffset, io.SeekStart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to seek to model start: %w", err)
+		}
+
+		// Read model data
+		modelData := make([]byte, modelSize)
+		_, err = io.ReadFull(file, modelData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read model data: %w", err)
+		}
+
+		// Verify GGUF header in the loaded data
+		if len(modelData) >= 4 {
+			magic := binary.LittleEndian.Uint32(modelData[0:4])
+			if magic == 0x46554747 {
+				fmt.Printf("✅ Valid GGUF header found in loaded data\n")
+			} else {
+				fmt.Printf("❌ Invalid magic in loaded data: 0x%08x (expected 0x46554747)\n", magic)
+				fmt.Printf("First 32 bytes: % 02x\n", modelData[:32])
+			}
+		}
+
+		fmt.Printf("Successfully loaded self-contained model into memory\n")
+
+		// Force MMap to false for large models
+		modifiedOpts := append(opts, SetMMap(false))
+		return NewFromMemory(modelData, modifiedOpts...)
+	}
+
+	// For smaller models, check if we are on macOS first
+	// macOS has known issues with mmap on self-contained binaries, so use memory loading
+	if runtime.GOOS == "darwin" {
+		fmt.Printf("macOS detected: using memory loading instead of mmap to avoid platform limitations\n")
+
+		// Seek to model start
+		_, err = file.Seek(modelOffset, io.SeekStart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to seek to model start: %w", err)
+		}
+
+		// Read model data
+		modelData := make([]byte, modelSize)
+		_, err = io.ReadFull(file, modelData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read model data: %w", err)
+		}
+
+		// Verify GGUF header in the loaded data
+		if len(modelData) >= 4 {
+			magic := binary.LittleEndian.Uint32(modelData[0:4])
+			if magic == 0x46554747 {
+				fmt.Printf("Valid GGUF header found in loaded data\n")
+			} else {
+				fmt.Printf("Warning: Invalid magic in loaded data: 0x%08x (expected 0x46554747)\n", magic)
+			}
+		}
+
+		fmt.Printf("Successfully loaded self-contained model into memory (%d MB)\n", modelSize/(1024*1024))
+
+		// Force MMap to false for macOS
+		modifiedOpts := append(opts, SetMMap(false))
+		return NewFromMemory(modelData, modifiedOpts...)
+	}
+
+	// For non-macOS Unix systems, try mmap
+	fd := int(file.Fd())
 	addr, mappedData, err := mmapModel(fd, modelOffset, int(modelSize))
 	if err != nil {
 		// Fallback to standard memory loading if mmap fails
@@ -200,8 +271,19 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 			return nil, fmt.Errorf("failed to read model data: %w", err)
 		}
 
+		// Verify GGUF header in the loaded data
+		if len(modelData) >= 4 {
+			magic := binary.LittleEndian.Uint32(modelData[0:4])
+			if magic == 0x46554747 {
+				fmt.Printf("Valid GGUF header found in loaded data\n")
+			} else {
+				fmt.Printf("Warning: Invalid magic in loaded data: 0x%08x (expected 0x46554747)\n", magic)
+			}
+		}
+
 		fmt.Printf("Successfully loaded self-contained model into memory\n")
-		return NewFromMemory(modelData, opts...)
+		modifiedOpts := append(opts, SetMMap(false))
+		return NewFromMemory(modelData, modifiedOpts...)
 	}
 
 	fmt.Printf("Successfully mapped self-contained model at address %p\n", unsafe.Pointer(addr))
@@ -218,8 +300,12 @@ func LoadSelfContainedModel(opts ...ModelOption) (*LLama, error) {
 		}
 	}
 
-	// Use the zero-copy mmap loader
-	return NewFromMMap(addr, int(modelSize), opts...)
+	// Use NewFromMemory with the mapped data
+	// Force MMap to false to avoid double mmap in llama.cpp
+	// Append SetMMap(false) to the options to prevent llama.cpp from trying to mmap again
+	modifiedOpts := append(opts, SetMMap(false))
+
+	return NewFromMemory(mappedData, modifiedOpts...)
 }
 
 // NewFromMMap creates a new LLama model from a memory-mapped region (zero-copy)
